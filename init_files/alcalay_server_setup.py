@@ -1,55 +1,13 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-Alcalay Server - Initial Setup
-==============================
-
-Initial installation/setup wizard for the Alcalay server.
-
-Suggested location:
-    alcalay/init_files/alcalay_server_setup.py
-
-This script creates the initial server configuration.
-
-Supported server operating systems:
-    - Windows
-    - macOS
-
-Configured components:
-    - Alcalay server
-    - PostgreSQL
-    - Local document storage
-    - Search index
-    - Backups
-    - Google Drive
-    - Gmail
-    - OCR
-    - AI
-    - ML
-    - Authentication
-    - Incremental synchronization
-
-IMPORTANT:
-    Gmail is configured to synchronize SELECTED LABELS ONLY.
-    The entire Gmail mailbox is NOT synchronized.
-
-The actual Gmail OAuth connection, label selection UI,
-synchronization engine, indexing engine and runtime API
-will be implemented in later stages.
-"""
-
 from __future__ import annotations
 
 import json
+import os
 import platform
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-
-# ============================================================================
-# CONSTANTS
-# ============================================================================
 
 APP_NAME = "Alcalay"
 CONFIG_VERSION = "1.0"
@@ -57,933 +15,629 @@ CONFIG_VERSION = "1.0"
 DEFAULT_API_PORT = 8443
 DEFAULT_POSTGRES_PORT = 5432
 
+CONFIG_FILENAME = "alcalay_config.json"
+ENV_EXAMPLE_FILENAME = ".env.example"
 
-# ============================================================================
-# GENERAL HELPERS
-# ============================================================================
+
+# ---------------------------------------------------------------------------
+# General helpers
+# ---------------------------------------------------------------------------
 
 def now_iso() -> str:
-    """Return current UTC timestamp in ISO format."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    """Return current UTC timestamp in ISO-8601 format."""
+    return datetime.now(timezone.utc).isoformat()
 
 
-def ask(
-    prompt: str,
-    default: str | None = None,
-    required: bool = False,
-) -> str:
-    """Ask the user for a text value."""
-
-    while True:
-        suffix = f" [{default}]" if default else ""
-
-        value = input(f"{prompt}{suffix}: ").strip()
-
-        if not value and default is not None:
-            value = default
-
-        if required and not value:
-            print("ערך זה חובה.")
-            continue
-
-        return value
+def normalize_path(value: str | Path) -> str:
+    """Normalize a path without requiring it to exist."""
+    return str(Path(value).expanduser())
 
 
-def ask_int(
-    prompt: str,
-    default: int,
-) -> int:
-    """Ask the user for a valid TCP port."""
-
-    while True:
-        value = ask(prompt, str(default))
-
-        try:
-            number = int(value)
-
-            if 1 <= number <= 65535:
-                return number
-
-        except ValueError:
-            pass
-
-        print("נא להזין מספר בין 1 ל-65535.")
-
-
-def ask_yes_no(
-    prompt: str,
-    default: bool = True,
-) -> bool:
-    """Ask a yes/no question."""
-
-    default_text = "Y/n" if default else "y/N"
-
-    while True:
-
-        value = input(
-            f"{prompt} [{default_text}]: "
-        ).strip().lower()
-
-        if not value:
-            return default
-
-        if value in ("y", "yes", "כן"):
-            return True
-
-        if value in ("n", "no", "לא"):
-            return False
-
-        print("נא להזין Y/N.")
-
-
-def normalize_path(value: str) -> str:
-    """Normalize a user supplied filesystem path."""
-
-    return str(
-        Path(value).expanduser()
-    )
-
-
-def create_directory(path: str) -> None:
+def create_directory(path: str | Path) -> Path:
     """Create a directory if it does not exist."""
-
-    Path(path).expanduser().mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    directory = Path(path).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
 
-# ============================================================================
-# SERVER OS
-# ============================================================================
+def is_valid_port(value: Any) -> bool:
+    try:
+        port = int(value)
+        return 1 <= port <= 65535
+    except (TypeError, ValueError):
+        return False
 
-def choose_server_os() -> str:
+
+def tcp_test(host: str, port: int, timeout: float = 3.0) -> tuple[bool, str]:
     """
-    Ask which operating system will be used by the Alcalay server.
+    Test whether a TCP endpoint can be reached.
 
-    The user can explicitly choose Windows or macOS even when running
-    the setup script from another operating system.
+    This does NOT authenticate to PostgreSQL.
+    It only verifies TCP connectivity.
+    """
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, f"TCP connection successful: {host}:{port}"
+    except socket.timeout:
+        return False, f"Connection timeout: {host}:{port}"
+    except OSError as exc:
+        return False, f"Connection failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# Default paths
+# ---------------------------------------------------------------------------
+
+def default_server_root(server_os: str | None = None) -> Path:
+    """
+    Return a sensible default server root for the selected server OS.
+
+    The path is only a configuration default. It is not automatically used
+    to perform remote operations on another machine.
+    """
+    selected_os = (server_os or platform.system()).strip().lower()
+
+    if selected_os in {"windows", "win32", "win"}:
+        return Path(r"C:\AlcalayServer")
+
+    return Path.home() / "AlcalayServer"
+
+
+# ---------------------------------------------------------------------------
+# Configuration construction
+# ---------------------------------------------------------------------------
+
+def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Convert the flat UI state into the canonical Alcalay configuration.
+
+    The UI is intentionally not responsible for the final configuration
+    structure. This function is the central mapping point.
     """
 
-    detected = platform.system().lower()
+    server = ui_state.get("server", {})
+    paths = ui_state.get("paths", {})
+    postgres = ui_state.get("postgresql", {})
+    google_drive = ui_state.get("google_drive", {})
+    gmail = ui_state.get("gmail", {})
+    processing = ui_state.get("processing", {})
+    ocr = ui_state.get("ocr", {})
+    ai_ml = ui_state.get("ai_ml", {})
+    search = ui_state.get("search", {})
+    security = ui_state.get("security", {})
 
-    if detected == "windows":
-        detected_name = "Windows"
-
-    elif detected == "darwin":
-        detected_name = "macOS"
-
-    else:
-        detected_name = "Other"
-
-    print()
-    print("--- מערכת ההפעלה של שרת Alcalay ---")
-    print()
-    print("1. Windows")
-    print("2. macOS")
-    print()
-    print(
-        f"מערכת ההפעלה הנוכחית שזוהתה: {detected_name}"
-    )
-    print()
-
-    while True:
-
-        choice = input(
-            "בחר 1 או 2: "
-        ).strip()
-
-        if choice == "1":
-            return "windows"
-
-        if choice == "2":
-            return "macos"
-
-        print("בחירה לא תקינה.")
-
-
-def default_server_root(
-    server_os: str,
-) -> str:
-    """Return a sensible default root directory."""
-
-    if server_os == "windows":
-
-        return r"C:\AlcalayServer"
-
-    return str(
-        Path.home() / "AlcalayServer"
-    )
-
-
-# ============================================================================
-# HEADER
-# ============================================================================
-
-def print_header() -> None:
-
-    print()
-    print("=" * 78)
-    print("ALCALAY SERVER - INITIAL SETUP")
-    print("=" * 78)
-    print()
-    print("אשף הקמת שרת Alcalay")
-    print()
-    print(
-        "שלב זה יוצר את תצורת השרת הראשונית."
-    )
-    print(
-        "הוא אינו מפעיל עדיין OAuth, סנכרון Gmail או מנוע החיפוש."
-    )
-    print()
-
-
-# ============================================================================
-# MAIN SETUP
-# ============================================================================
-
-def main() -> None:
-
-    print_header()
-
-    # ========================================================================
-    # 1. SERVER
-    # ========================================================================
-
-    server_os = choose_server_os()
-
-    print()
-    print("--- הגדרות שרת ---")
-    print()
-
-    server_name = ask(
-        "שם השרת",
-        "ALCALAY-SERVER",
-    )
-
-    server_host = ask(
-        "כתובת / DNS של השרת",
-        "0.0.0.0",
-    )
-
-    server_port = ask_int(
-        "פורט API",
-        DEFAULT_API_PORT,
-    )
-
-    # ========================================================================
-    # 2. PATHS
-    # ========================================================================
-
-    print()
-    print("--- תיקיות שרת ---")
-    print()
-
-    print(
-        "ניתן לשנות את כל הנתיבים."
-    )
-
+    server_os = server.get("server_os") or platform.system()
     app_root = normalize_path(
-        ask(
-            "תיקיית הבסיס של Alcalay",
-            default_server_root(server_os),
-        )
+        paths.get("server_root")
+        or default_server_root(server_os)
     )
 
     documents_root = normalize_path(
-        ask(
-            "תיקיית המסמכים המקומית",
-            str(
-                Path(app_root) /
-                "documents"
-            ),
-        )
+        paths.get("documents")
+        or Path(app_root) / "documents"
     )
 
     index_root = normalize_path(
-        ask(
-            "תיקיית אינדקס החיפוש",
-            str(
-                Path(app_root) /
-                "index"
-            ),
-        )
+        paths.get("index")
+        or Path(app_root) / "search_index"
     )
 
-    backup_root = normalize_path(
-        ask(
-            "תיקיית גיבויים",
-            str(
-                Path(app_root) /
-                "backups"
-            ),
-        )
+    backups_root = normalize_path(
+        paths.get("backups")
+        or Path(app_root) / "backups"
     )
 
     logs_root = normalize_path(
-        ask(
-            "תיקיית לוגים",
-            str(
-                Path(app_root) /
-                "logs"
-            ),
-        )
+        paths.get("logs")
+        or Path(app_root) / "logs"
     )
 
-    # ========================================================================
-    # 3. POSTGRESQL
-    # ========================================================================
-
-    print()
-    print("--- PostgreSQL ---")
-    print()
-
-    print(
-        "PostgreSQL אמור לרוץ על שרת המשרד."
+    config_root = normalize_path(
+        paths.get("config")
+        or Path(app_root) / "config"
     )
 
-    pg_host = ask(
-        "PostgreSQL host",
-        "127.0.0.1",
+    data_root = normalize_path(
+        paths.get("data")
+        or Path(app_root) / "data"
     )
 
-    pg_port = ask_int(
-        "PostgreSQL port",
-        DEFAULT_POSTGRES_PORT,
+    runtime_root = normalize_path(
+        paths.get("runtime")
+        or Path(app_root) / "runtime"
     )
 
-    pg_database = ask(
-        "שם בסיס הנתונים",
-        "alcalay",
-    )
+    selected_labels = gmail.get("selected_labels", [])
 
-    pg_user = ask(
-        "משתמש PostgreSQL",
-        "alcalay",
-    )
+    if not isinstance(selected_labels, list):
+        selected_labels = list(selected_labels or [])
 
-    print()
-    print(
-        "סיסמת PostgreSQL לא תישמר בקובץ התצורה."
-    )
-    print(
-        "היא תוגדר באמצעות:"
-    )
-    print(
-        "ALCALAY_POSTGRES_PASSWORD"
-    )
+    account_id = gmail.get("account_id") or "gmail_001"
 
-    # ========================================================================
-    # 4. GOOGLE DRIVE
-    # ========================================================================
-
-    print()
-    print("--- Google Drive ---")
-    print()
-
-    drive_enabled = ask_yes_no(
-        "האם Google Drive יהיה מקור נתונים?",
-        True,
-    )
-
-    drive_root = ""
-    drive_sync_mode = "disabled"
-
-    if drive_enabled:
-
-        drive_root = ask(
-            "Google Drive root / folder ID / path",
-            "",
-        )
-
-        drive_sync_mode = (
-            "configured_source"
-        )
-
-    # ========================================================================
-    # 5. GMAIL
-    # ========================================================================
-
-    print()
-    print("--- Gmail ---")
-    print()
-
-    print(
-        "בשלב הראשון מוגדר חשבון Gmail אחד בלבד."
-    )
-
-    print(
-        "בעתיד ניתן יהיה להוסיף חשבונות Gmail נוספים."
-    )
-
-    print()
-    print("מדיניות Gmail:")
-    print(
-        "  1. לא מסנכרנים את כל תיבת הדואר."
-    )
-    print(
-        "  2. מסנכרנים רק Labels שתבחר."
-    )
-    print(
-        "  3. רשימת ה-Labels מתחילה ריקה."
-    )
-    print(
-        "  4. ניתן יהיה להוריד Attachments לשרת."
-    )
-    print(
-        "  5. הסנכרון יהיה Incremental."
-    )
-    print(
-        "  6. יישמר Gmail History ID."
-    )
-
-    gmail_enabled = ask_yes_no(
-        "האם להפעיל Gmail כמקור נתונים?",
-        True,
-    )
-
-    gmail_accounts = []
-
-    if gmail_enabled:
-
-        print()
-
-        gmail_address = ask(
-            "כתובת Gmail הראשונה",
-            "",
-            required=True,
-        )
-
-        gmail_accounts.append(
-            {
-                "account_id": "gmail_001",
-
-                "email": gmail_address,
-
-                "enabled": True,
-
-                # IMPORTANT:
-                # The list remains empty during setup.
-                # Labels will be selected later through the Gmail
-                # connection/configuration component.
-                "selected_labels": [],
-
-                "sync_mode": (
-                    "selected_labels_only"
-                ),
-
-                # Incremental synchronization state.
-                "last_successful_refresh_at": None,
-
-                "last_history_id": None,
-
-                "last_sync_status": (
-                    "not_started"
-                ),
-
-                "last_sync_error": None,
-            }
-        )
-
-    # ========================================================================
-    # 6. DOCUMENT PROCESSING
-    # ========================================================================
-
-    print()
-    print("--- OCR / AI / ML ---")
-    print()
-
-    ocr_enabled = ask_yes_no(
-        "להפעיל OCR?",
-        True,
-    )
-
-    ai_enabled = ask_yes_no(
-        "להפעיל AI להבנת תוכן?",
-        True,
-    )
-
-    ml_enabled = ask_yes_no(
-        "להפעיל ML לסיווג והבנת תוכן?",
-        True,
-    )
-
-    # ========================================================================
-    # 7. SECURITY
-    # ========================================================================
-
-    print()
-    print("--- אבטחה ---")
-    print()
-
-    authentication_enabled = ask_yes_no(
-        "להפעיל אימות משתמשים?",
-        True,
-    )
-
-    # ========================================================================
-    # 8. CREATE DIRECTORIES
-    # ========================================================================
-
-    print()
-    print("--- יצירת תיקיות ---")
-    print()
-
-    folders = [
-
-        app_root,
-
-        documents_root,
-
-        index_root,
-
-        backup_root,
-
-        logs_root,
-
-        str(
-            Path(app_root) /
-            "config"
+    gmail_account = {
+        "account_id": account_id,
+        "email": gmail.get("email", "").strip(),
+        "enabled": bool(gmail.get("enabled", False)),
+        "selected_labels": selected_labels,
+        "selected_labels_only": True,
+        "download_attachments": bool(
+            gmail.get("download_attachments", True)
         ),
-
-        str(
-            Path(app_root) /
-            "data"
+        "index_message_body": bool(
+            gmail.get("index_message_body", True)
         ),
-
-        str(
-            Path(app_root) /
-            "runtime"
+        "incremental_sync": bool(
+            gmail.get("incremental_sync", True)
         ),
-    ]
+        "last_successful_sync": gmail.get("last_successful_sync"),
+        "history_id": gmail.get("history_id"),
+        "status": gmail.get("status", "not_connected"),
+    }
 
-    for folder in folders:
-
-        create_directory(folder)
-
-    config_dir = (
-        Path(app_root) /
-        "config"
-    )
-
-    # ========================================================================
-    # 9. CONFIGURATION
-    # ========================================================================
-
-    config = {
+    configuration = {
+        "config_version": CONFIG_VERSION,
+        "generated_at": now_iso(),
 
         "application": {
-
             "name": APP_NAME,
-
-            "config_version": (
-                CONFIG_VERSION
+            "setup_version": ui_state.get(
+                "setup_version",
+                CONFIG_VERSION,
             ),
-
-            "created_at": now_iso(),
-
-            "setup_phase": True,
-
-            "runtime_phase_ready": False,
         },
 
         "server": {
-
-            "name": server_name,
-
             "os": server_os,
-
-            "host": server_host,
-
-            "port": server_port,
-
-            "protocol": "https",
+            "name": server.get("server_name", "").strip(),
+            "host": server.get("host", "0.0.0.0").strip(),
+            "api_port": int(
+                server.get("api_port", DEFAULT_API_PORT)
+            ),
+            "public_hostname": server.get(
+                "public_hostname",
+                "",
+            ).strip(),
         },
 
         "paths": {
-
             "app_root": app_root,
-
-            "documents_root": (
-                documents_root
-            ),
-
-            "index_root": (
-                index_root
-            ),
-
-            "backup_root": (
-                backup_root
-            ),
-
-            "logs_root": (
-                logs_root
-            ),
+            "documents": documents_root,
+            "search_index": index_root,
+            "backups": backups_root,
+            "logs": logs_root,
+            "config": config_root,
+            "data": data_root,
+            "runtime": runtime_root,
         },
 
         "postgresql": {
-
-            "host": pg_host,
-
-            "port": pg_port,
-
-            "database": pg_database,
-
-            "user": pg_user,
-
-            "password_env": (
-                "ALCALAY_POSTGRES_PASSWORD"
+            "host": postgres.get("host", "localhost").strip(),
+            "port": int(
+                postgres.get(
+                    "port",
+                    DEFAULT_POSTGRES_PORT,
+                )
+            ),
+            "database": postgres.get(
+                "database",
+                "alcalay",
+            ).strip(),
+            "user": postgres.get(
+                "user",
+                "alcalay",
+            ).strip(),
+            "password_env": "ALCALAY_POSTGRES_PASSWORD",
+            "connection_tested": bool(
+                postgres.get("connection_tested", False)
             ),
         },
 
         "sources": {
-
             "local_server": {
-
                 "enabled": True,
-
                 "root": documents_root,
-
-                "sync_mode": (
-                    "configured_folders"
-                ),
             },
 
             "google_drive": {
-
-                "enabled": (
-                    drive_enabled
+                "enabled": bool(
+                    google_drive.get("enabled", False)
                 ),
-
-                "root": drive_root,
-
-                "sync_mode": (
-                    drive_sync_mode
+                "root": google_drive.get(
+                    "root",
+                    "",
+                ).strip(),
+                "sync_mode": google_drive.get(
+                    "sync_mode",
+                    "index_source",
+                ),
+                "oauth_status": google_drive.get(
+                    "oauth_status",
+                    "not_connected",
                 ),
             },
 
             "gmail": {
-
-                "enabled": (
-                    gmail_enabled
-                ),
-
                 "global_policy": {
-
-                    # CRITICAL:
-                    # Never synchronize the entire mailbox.
                     "sync_entire_mailbox": False,
-
                     "sync_selected_labels_only": True,
-
-                    # Email processing.
-                    "index_email_body": True,
-
-                    "download_attachments": True,
-
-                    "index_attachments": True,
-
-                    # Incremental synchronization.
-                    "incremental_sync": True,
-
-                    "use_history_id": True,
-
-                    # Deduplication.
+                    "incremental": True,
+                    "history_id_enabled": True,
                     "deduplicate_by_message_id": True,
-
                     "deduplicate_by_content_hash": True,
-
-                    # Full synchronization is an explicit
-                    # administrative operation only.
-                    "allow_manual_full_sync": True,
-
-                    "full_sync_requires_explicit_action": True,
+                    "manual_full_sync_explicit_only": True,
                 },
-
-                "accounts": (
-                    gmail_accounts
-                ),
+                "accounts": [gmail_account],
             },
         },
 
         "processing": {
-
-            "ocr_enabled": (
-                ocr_enabled
+            "extract_text": bool(
+                processing.get("extract_text", True)
             ),
-
-            "ai_enabled": (
-                ai_enabled
+            "extract_metadata": bool(
+                processing.get("extract_metadata", True)
             ),
-
-            "ml_enabled": (
-                ml_enabled
+            "classification": bool(
+                processing.get("classification", True)
             ),
+            "keywords": bool(
+                processing.get("keywords", True)
+            ),
+            "thesaurus": bool(
+                processing.get("thesaurus", True)
+            ),
+        },
 
-            "extract_text": True,
+        "ocr": {
+            "enabled": bool(
+                ocr.get("enabled", True)
+            ),
+            "language": ocr.get(
+                "language",
+                "heb+eng",
+            ),
+            "automatic": bool(
+                ocr.get("automatic", True)
+            ),
+        },
 
-            "extract_metadata": True,
+        "ai_ml": {
+            "enabled": bool(
+                ai_ml.get("enabled", True)
+            ),
+            "semantic_understanding": bool(
+                ai_ml.get(
+                    "semantic_understanding",
+                    True,
+                )
+            ),
+            "classification": bool(
+                ai_ml.get("classification", True)
+            ),
+            "similar_documents": bool(
+                ai_ml.get(
+                    "similar_documents",
+                    True,
+                )
+            ),
+        },
 
-            "classify_documents": True,
-
-            "extract_keywords": True,
-
-            "thesaurus_enabled": True,
-
-            "semantic_search_enabled": True,
-
-            "index_new_content": True,
-
-            "reprocess_changed_content": True,
+        "search": {
+            "full_text": bool(
+                search.get("full_text", True)
+            ),
+            "metadata": bool(
+                search.get("metadata", True)
+            ),
+            "semantic": bool(
+                search.get("semantic", True)
+            ),
+            "boolean": bool(
+                search.get("boolean", True)
+            ),
+            "reindex_changed_documents": bool(
+                search.get(
+                    "reindex_changed_documents",
+                    True,
+                )
+            ),
         },
 
         "security": {
-
-            "authentication_enabled": (
-                authentication_enabled
+            "authentication_required": bool(
+                security.get(
+                    "authentication_required",
+                    True,
+                )
             ),
-
-            "api_secret_env": (
-                "ALCALAY_API_SECRET"
+            "tls_required": bool(
+                security.get(
+                    "tls_required",
+                    True,
+                )
             ),
-
-            "tls_required": True,
-
-            "secrets_in_config": False,
+            "api_secret_env": "ALCALAY_API_SECRET",
         },
 
         "sync": {
-
-            "incremental_sync": True,
-
-            "deduplicate_by_source_id": True,
-
-            "deduplicate_by_hash": True,
-
-            "store_sync_state_in_postgresql": True,
+            "incremental": True,
+            "full_sync_manual_only": True,
+            "deduplication": True,
         },
 
         "git_policy": {
-
-            "commit_setup_code": True,
-
-            "commit_config_template": True,
-
-            "commit_real_data": False,
-
-            "commit_documents": False,
-
-            "commit_database": False,
-
-            "commit_secrets": False,
-
-            "commit_oauth_tokens": False,
-
-            "commit_search_indexes": False,
+            "store_source_code": True,
+            "store_schema_and_migrations": True,
+            "store_config_templates": True,
+            "exclude_documents": True,
+            "exclude_databases": True,
+            "exclude_passwords": True,
+            "exclude_oauth_tokens": True,
+            "exclude_indexes": True,
+            "exclude_models": True,
         },
     }
 
-    # ========================================================================
-    # 10. WRITE CONFIGURATION
-    # ========================================================================
+    return configuration
 
-    config_path = (
-        config_dir /
-        "alcalay_config.json"
+
+# ---------------------------------------------------------------------------
+# Filesystem operations
+# ---------------------------------------------------------------------------
+
+def create_server_directories(
+    configuration: dict[str, Any],
+) -> list[Path]:
+    """
+    Create all directories required by the Alcalay server configuration.
+
+    Returns a list of directories that were created/verified.
+    """
+
+    paths = configuration.get("paths", {})
+    app_root = Path(paths["app_root"])
+
+    directories = [
+        app_root,
+        Path(paths["documents"]),
+        Path(paths["search_index"]),
+        Path(paths["backups"]),
+        Path(paths["logs"]),
+        Path(paths["config"]),
+        Path(paths["data"]),
+        Path(paths["runtime"]),
+    ]
+
+    result: list[Path] = []
+
+    for directory in directories:
+        result.append(create_directory(directory))
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Configuration files
+# ---------------------------------------------------------------------------
+
+def write_configuration(
+    configuration: dict[str, Any],
+) -> tuple[Path, Path]:
+    """
+    Write the canonical JSON configuration and .env.example.
+
+    Returns:
+        (configuration_path, env_example_path)
+    """
+
+    paths = configuration.get("paths", {})
+
+    config_directory = create_directory(
+        paths["config"]
+    )
+
+    configuration_path = (
+        config_directory / CONFIG_FILENAME
     )
 
     env_example_path = (
-        config_dir /
-        ".env.example"
+        config_directory / ENV_EXAMPLE_FILENAME
     )
 
-    config_path.write_text(
+    configuration_path.write_text(
         json.dumps(
-            config,
-            ensure_ascii=False,
+            configuration,
             indent=2,
+            ensure_ascii=False,
         ),
         encoding="utf-8",
     )
 
-    env_example = """# Alcalay environment variables
-# DO NOT commit the real .env file to Git.
+    env_content = """# Alcalay environment variables
+# Copy this file to a secure environment configuration.
+# DO NOT commit real secrets to Git.
 
 ALCALAY_POSTGRES_PASSWORD=
 ALCALAY_API_SECRET=
-
-# Gmail OAuth credentials will be configured by
-# the Gmail integration/runtime component.
 """
 
     env_example_path.write_text(
-        env_example,
+        env_content,
         encoding="utf-8",
     )
 
-    # ========================================================================
-    # 11. SUMMARY
-    # ========================================================================
+    return configuration_path, env_example_path
 
-    print()
-    print("=" * 78)
-    print(
-        "ההקמה הראשונית של Alcalay הסתיימה בהצלחה"
-    )
-    print("=" * 78)
 
-    print()
-    print(
-        f"שרת:                  {server_os}"
-    )
+def load_configuration(
+    configuration_path: str | Path,
+) -> dict[str, Any]:
+    """Load an existing Alcalay configuration."""
+    path = Path(configuration_path)
 
-    print(
-        f"שם שרת:               {server_name}"
-    )
-
-    print(
-        f"API:                   "
-        f"{server_host}:{server_port}"
-    )
-
-    print(
-        f"Alcalay root:          "
-        f"{app_root}"
-    )
-
-    print(
-        f"מסמכים:                "
-        f"{documents_root}"
-    )
-
-    print(
-        f"אינדקס:                "
-        f"{index_root}"
-    )
-
-    print(
-        f"גיבויים:               "
-        f"{backup_root}"
-    )
-
-    print(
-        f"PostgreSQL:             "
-        f"{pg_host}:{pg_port}/{pg_database}"
-    )
-
-    print(
-        f"Google Drive:           "
-        f"{'מופעל' if drive_enabled else 'כבוי'}"
-    )
-
-    print(
-        f"Gmail:                  "
-        f"{'מופעל' if gmail_enabled else 'כבוי'}"
-    )
-
-    if gmail_enabled:
-
-        account = gmail_accounts[0]
-
-        print()
-
-        print(
-            f"חשבון Gmail ראשון:     "
-            f"{account['email']}"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Configuration file not found: {path}"
         )
 
-        print(
-            "סנכרון Gmail:          "
-            "Labels נבחרים בלבד"
+    return json.loads(
+        path.read_text(encoding="utf-8")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def validate_configuration(
+    configuration: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    """
+    Validate the canonical configuration.
+
+    This validates configuration and filesystem state only.
+    It does not pretend that PostgreSQL, Gmail or Google Drive
+    are connected unless they were actually tested.
+    """
+
+    errors: list[str] = []
+
+    application = configuration.get("application", {})
+    server = configuration.get("server", {})
+    paths = configuration.get("paths", {})
+    postgres = configuration.get("postgresql", {})
+    security = configuration.get("security", {})
+    gmail = (
+        configuration
+        .get("sources", {})
+        .get("gmail", {})
+    )
+
+    if application.get("name") != APP_NAME:
+        errors.append(
+            "Application name is invalid."
         )
 
-        print(
-            "כל תיבת Gmail:         לא"
+    server_name = server.get("name", "").strip()
+    if not server_name:
+        errors.append(
+            "Server name is required."
         )
 
-        print(
-            "גוף הודעה:             כן"
+    if not is_valid_port(
+        server.get("api_port")
+    ):
+        errors.append(
+            "API port is invalid."
         )
 
-        print(
-            "Attachments:            כן"
+    if not paths.get("app_root"):
+        errors.append(
+            "Application root is missing."
         )
 
-        print(
-            "Incremental sync:      כן"
+    for key in (
+        "documents",
+        "search_index",
+        "backups",
+        "logs",
+        "config",
+        "data",
+        "runtime",
+    ):
+        if not paths.get(key):
+            errors.append(
+                f"Path '{key}' is missing."
+            )
+
+    if not postgres.get("host"):
+        errors.append(
+            "PostgreSQL host is missing."
         )
 
-        print(
-            "Gmail History ID:      כן"
+    if not is_valid_port(
+        postgres.get("port")
+    ):
+        errors.append(
+            "PostgreSQL port is invalid."
         )
 
+    if not postgres.get("database"):
+        errors.append(
+            "PostgreSQL database is missing."
+        )
+
+    if not postgres.get("user"):
+        errors.append(
+            "PostgreSQL user is missing."
+        )
+
+    if security.get("tls_required") is not True:
+        errors.append(
+            "TLS must be required."
+        )
+
+    gmail_policy = gmail.get(
+        "global_policy",
+        {},
+    )
+
+    if gmail_policy.get(
+        "sync_entire_mailbox"
+    ):
+        errors.append(
+            "Entire Gmail mailbox synchronization "
+            "must remain disabled."
+        )
+
+    if not gmail_policy.get(
+        "sync_selected_labels_only"
+    ):
+        errors.append(
+            "Gmail selected-label policy is required."
+        )
+
+    if not gmail_policy.get(
+        "incremental"
+    ):
+        errors.append(
+            "Gmail incremental synchronization "
+            "must be enabled."
+        )
+
+    return (
+        len(errors) == 0,
+        errors,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compatibility / terminal entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """
+    Terminal entry point.
+
+    The graphical UI does not call this function.
+    It exists so the engine can still be used independently
+    from a terminal if required.
+    """
+
+    print(f"{APP_NAME} Server Setup")
+    print("=" * 60)
     print()
-
     print(
-        "קובץ תצורה:"
+        "The graphical setup UI should be used for interactive setup:"
     )
-
-    print(
-        config_path
-    )
-
     print()
-
-    print(
-        "קובץ משתני סביבה לדוגמה:"
-    )
-
-    print(
-        env_example_path
-    )
-
+    print("    python init_files/setup_ui.py")
     print()
-    print("--- השלבים הבאים ---")
-    print()
-
     print(
-        "1. התקנת PostgreSQL."
+        "The setup engine is exposed through reusable functions "
+        "for the graphical UI."
     )
 
-    print(
-        "2. יצירת בסיס הנתונים והמשתמש."
-    )
-
-    print(
-        "3. הגדרת ALCALAY_POSTGRES_PASSWORD."
-    )
-
-    print(
-        "4. הגדרת ALCALAY_API_SECRET."
-    )
-
-    print(
-        "5. חיבור OAuth ל-Gmail."
-    )
-
-    print(
-        "6. הצגת Labels של החשבון."
-    )
-
-    print(
-        "7. בחירת ה-Labels שיסונכרנו."
-    )
-
-    print(
-        "8. הקמת מנגנון הסנכרון והאינדקס."
-    )
-
-    print()
-
-    print(
-        "אין להכניס סיסמאות, OAuth tokens, "
-        "מסמכים, DB או אינדקסים ל-Git."
-    )
-
-
-# ============================================================================
-# ENTRY POINT
-# ============================================================================
 
 if __name__ == "__main__":
     main()
