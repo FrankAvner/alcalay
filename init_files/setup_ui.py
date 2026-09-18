@@ -7,13 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -31,6 +29,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+# ---------------------------------------------------------------------------
+# Alcalay setup engine imports
+# ---------------------------------------------------------------------------
 
 try:
     from alcalay_server_setup import (
@@ -51,20 +54,15 @@ except ImportError:
         write_configuration,
     )
 
+
 try:
     from setup_detector import detect_server
     from setup_installer import prepare_server
-    from setup_orchestrator import (
-        run_full_setup,
-        run_setup_checks,
-    )
+    from setup_orchestrator import run_full_setup
 except ImportError:
     from .setup_detector import detect_server
     from .setup_installer import prepare_server
-    from .setup_orchestrator import (
-        run_full_setup,
-        run_setup_checks,
-    )
+    from .setup_orchestrator import run_full_setup
 
 
 APP_NAME = "Alcalay"
@@ -77,11 +75,15 @@ DEFAULT_API_PORT = 8443
 DEFAULT_POSTGRES_PORT = 5432
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 def detect_os() -> str:
+    """
+    Return a normalized operating-system name used by Alcalay configuration.
+    """
+
     system = platform.system()
 
     if system == "Windows":
@@ -97,12 +99,17 @@ def detect_os() -> str:
 
 
 def default_server_root_for_os() -> Path:
+    """
+    Return the default Alcalay server root for the current operating system.
+    """
+
     system = detect_os()
 
     try:
         return Path(
             default_server_root(system)
         ).expanduser()
+
     except Exception:
         if system == "Windows":
             return Path(r"C:\AlcalayServer")
@@ -110,57 +117,102 @@ def default_server_root_for_os() -> Path:
         return Path.home() / "AlcalayServer"
 
 
-def safe_int(value: Any, default: int) -> int:
+def safe_int(
+    value: Any,
+    default: int,
+) -> int:
+    """
+    Safely convert a value to int.
+    """
+
     try:
         return int(value)
+
     except (TypeError, ValueError):
         return default
 
 
 def choose_ui_font() -> QFont:
-    application = QApplication.instance()
+    """
+    Select a suitable cross-platform UI font.
 
-    if application is None:
-        return QFont("Arial", 10)
-
-    database = application.fontDatabase()
+    IMPORTANT:
+    PySide6 does not expose QApplication.fontDatabase().
+    QFontDatabase must be used directly.
+    """
 
     preferred = [
         "Segoe UI",
         "SF Pro Display",
         "Helvetica Neue",
+        "Helvetica",
         "Arial",
+        "Noto Sans",
+        "DejaVu Sans",
     ]
 
-    families = set(
-        database.families()
-    )
+    try:
+        families = set(
+            QFontDatabase.families()
+        )
+
+    except Exception:
+        families = set()
 
     for family in preferred:
         if family in families:
-            font = QFont(family, 10)
+            font = QFont(
+                family,
+                10,
+            )
+
             font.setStyleStrategy(
                 QFont.PreferAntialias
             )
+
             return font
 
-    return QFont("Arial", 10)
+    return QFont(
+        "Arial",
+        10,
+    )
 
 
 def bool_from_value(
     value: Any,
     default: bool = False,
 ) -> bool:
-    if isinstance(value, bool):
+    """
+    Convert common configuration values to bool.
+    """
+
+    if isinstance(
+        value,
+        bool,
+    ):
         return value
 
-    if isinstance(value, str):
-        return value.strip().lower() in {
+    if isinstance(
+        value,
+        str,
+    ):
+        normalized = value.strip().lower()
+
+        if normalized in {
             "true",
             "yes",
             "1",
             "on",
-        }
+        }:
+            return True
+
+        if normalized in {
+            "false",
+            "no",
+            "0",
+            "off",
+        }:
+            return False
 
     return default
 
@@ -168,6 +220,10 @@ def bool_from_value(
 def safe_json(
     value: Any,
 ) -> str:
+    """
+    Safely format an object as readable JSON.
+    """
+
     try:
         return json.dumps(
             value,
@@ -175,15 +231,63 @@ def safe_json(
             ensure_ascii=False,
             default=str,
         )
+
     except Exception:
         return str(value)
 
 
-# ---------------------------------------------------------------------------
-# Base step
-# ---------------------------------------------------------------------------
+def find_setup_window(
+    widget: QWidget | None,
+):
+    """
+    Walk up the Qt parent hierarchy until SetupWindow is found.
+
+    This is intentionally implemented without relying on a direct parent
+    because setup pages are hosted inside QScrollArea/QStackedWidget.
+    """
+
+    current = widget
+
+    while current is not None:
+
+        if isinstance(
+            current,
+            SetupWindow,
+        ):
+            return current
+
+        current = current.parentWidget()
+
+    raise RuntimeError(
+        "SetupWindow parent was not found."
+    )
+
+
+def import_database_checker():
+    """
+    Import setup_database in both direct-script and package execution modes.
+    """
+
+    try:
+        from setup_database import check_postgresql
+
+        return check_postgresql
+
+    except ImportError:
+        from .setup_database import check_postgresql
+
+        return check_postgresql
+
+
+# ===========================================================================
+# Base setup step
+# ===========================================================================
 
 class SetupStep(QWidget):
+    """
+    Base class for all Alcalay setup pages.
+    """
+
     def __init__(
         self,
         title: str,
@@ -195,16 +299,25 @@ class SetupStep(QWidget):
         self.title = title
         self.description = description
 
-        self.main_layout = QVBoxLayout(self)
+        self.main_layout = QVBoxLayout(
+            self
+        )
+
         self.main_layout.setContentsMargins(
             16,
             16,
             16,
             16,
         )
-        self.main_layout.setSpacing(12)
 
-        title_label = QLabel(title)
+        self.main_layout.setSpacing(
+            12
+        )
+
+        title_label = QLabel(
+            title
+        )
+
         title_label.setObjectName(
             "stepTitle"
         )
@@ -214,10 +327,15 @@ class SetupStep(QWidget):
         )
 
         if description:
+
             description_label = QLabel(
                 description
             )
-            description_label.setWordWrap(True)
+
+            description_label.setWordWrap(
+                True
+            )
+
             description_label.setObjectName(
                 "stepDescription"
             )
@@ -227,7 +345,10 @@ class SetupStep(QWidget):
             )
 
         self.content_layout = QVBoxLayout()
-        self.content_layout.setSpacing(10)
+
+        self.content_layout.setSpacing(
+            10
+        )
 
         self.main_layout.addLayout(
             self.content_layout
@@ -235,7 +356,9 @@ class SetupStep(QWidget):
 
         self.main_layout.addStretch()
 
-    def collect_state(self) -> dict[str, Any]:
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
         return {}
 
     def apply_state(
@@ -245,11 +368,12 @@ class SetupStep(QWidget):
         pass
 
 
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 1. Server
+# ===========================================================================
 
 class ServerStep(SetupStep):
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -264,9 +388,12 @@ class ServerStep(SetupStep):
             "Server Configuration"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         self.os_combo = QComboBox()
+
         self.os_combo.addItems(
             [
                 "Windows",
@@ -274,12 +401,21 @@ class ServerStep(SetupStep):
                 "Linux",
             ]
         )
-        self.os_combo.setCurrentText(
-            detect_os()
-        )
+
+        current_os = detect_os()
+
+        if current_os in {
+            "Windows",
+            "macOS",
+            "Linux",
+        }:
+            self.os_combo.setCurrentText(
+                current_os
+            )
 
         self.server_name = QLineEdit(
-            platform.node() or "AlcalayServer"
+            platform.node()
+            or "AlcalayServer"
         )
 
         self.host = QLineEdit(
@@ -287,10 +423,12 @@ class ServerStep(SetupStep):
         )
 
         self.api_port = QSpinBox()
+
         self.api_port.setRange(
             1,
             65535,
         )
+
         self.api_port.setValue(
             DEFAULT_API_PORT
         )
@@ -301,18 +439,22 @@ class ServerStep(SetupStep):
             "Operating system:",
             self.os_combo,
         )
+
         form.addRow(
             "Server name:",
             self.server_name,
         )
+
         form.addRow(
             "API bind address:",
             self.host,
         )
+
         form.addRow(
             "API port:",
             self.api_port,
         )
+
         form.addRow(
             "Public hostname:",
             self.public_hostname,
@@ -322,7 +464,10 @@ class ServerStep(SetupStep):
             group
         )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
             "os": self.os_combo.currentText(),
             "name": self.server_name.text().strip(),
@@ -333,7 +478,11 @@ class ServerStep(SetupStep):
             ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -347,7 +496,8 @@ class ServerStep(SetupStep):
         self.server_name.setText(
             state.get(
                 "name",
-                platform.node(),
+                platform.node()
+                or "AlcalayServer",
             )
         )
 
@@ -375,11 +525,12 @@ class ServerStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# Directories
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 2. Directories
+# ===========================================================================
 
 class DirectoriesStep(SetupStep):
+
     def __init__(
         self,
         parent: QWidget | None = None,
@@ -394,7 +545,9 @@ class DirectoriesStep(SetupStep):
             "Filesystem"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         self.server_root = QLineEdit(
             str(
@@ -412,22 +565,27 @@ class DirectoriesStep(SetupStep):
             "Server root:",
             self.server_root,
         )
+
         form.addRow(
             "Documents:",
             self.documents,
         )
+
         form.addRow(
             "Search index:",
             self.search_index,
         )
+
         form.addRow(
             "Backups:",
             self.backups,
         )
+
         form.addRow(
             "Logs:",
             self.logs,
         )
+
         form.addRow(
             "Config:",
             self.config,
@@ -454,12 +612,15 @@ class DirectoriesStep(SetupStep):
         buttons.addWidget(
             self.browse_button
         )
+
         buttons.addWidget(
             self.derive_button
         )
+
         buttons.addWidget(
             self.create_button
         )
+
         buttons.addStretch()
 
         self.content_layout.addLayout(
@@ -480,7 +641,10 @@ class DirectoriesStep(SetupStep):
 
         self.derive_paths()
 
-    def browse_server_root(self):
+    def browse_server_root(
+        self,
+    ) -> None:
+
         selected = QFileDialog.getExistingDirectory(
             self,
             "Select Alcalay Server Root",
@@ -491,39 +655,65 @@ class DirectoriesStep(SetupStep):
             self.server_root.setText(
                 selected
             )
+
             self.derive_paths()
 
-    def derive_paths(self):
+    def derive_paths(
+        self,
+    ) -> None:
+
+        root_text = (
+            self.server_root.text().strip()
+        )
+
+        if not root_text:
+            return
+
         root = Path(
-            self.server_root.text()
+            root_text
         ).expanduser()
 
         self.documents.setText(
-            str(root / "documents")
+            str(
+                root / "documents"
+            )
         )
 
         self.search_index.setText(
-            str(root / "search_index")
+            str(
+                root / "search_index"
+            )
         )
 
         self.backups.setText(
-            str(root / "backups")
+            str(
+                root / "backups"
+            )
         )
 
         self.logs.setText(
-            str(root / "logs")
+            str(
+                root / "logs"
+            )
         )
 
         self.config.setText(
-            str(root / "config")
+            str(
+                root / "config"
+            )
         )
 
-    def create_directories(self):
-        try:
-            state = self.parent_window().collect_state()
+    def create_directories(
+        self,
+    ) -> None:
 
-            configuration = build_configuration(
-                state
+        try:
+            window = find_setup_window(
+                self
+            )
+
+            configuration = (
+                window.build_current_configuration()
             )
 
             create_server_directories(
@@ -537,39 +727,43 @@ class DirectoriesStep(SetupStep):
             )
 
         except Exception as exc:
+
             QMessageBox.critical(
                 self,
                 "Directory Error",
                 str(exc),
             )
 
-    def parent_window(self):
-        widget = self.parent()
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
 
-        while widget is not None:
-            if isinstance(
-                widget,
-                SetupWindow,
-            ):
-                return widget
-
-            widget = widget.parent()
-
-        raise RuntimeError(
-            "SetupWindow parent was not found."
-        )
-
-    def collect_state(self):
         return {
-            "server_root": self.server_root.text().strip(),
-            "documents": self.documents.text().strip(),
-            "search_index": self.search_index.text().strip(),
-            "backups": self.backups.text().strip(),
-            "logs": self.logs.text().strip(),
-            "config": self.config.text().strip(),
+            "server_root": (
+                self.server_root.text().strip()
+            ),
+            "documents": (
+                self.documents.text().strip()
+            ),
+            "search_index": (
+                self.search_index.text().strip()
+            ),
+            "backups": (
+                self.backups.text().strip()
+            ),
+            "logs": (
+                self.logs.text().strip()
+            ),
+            "config": (
+                self.config.text().strip()
+            ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -579,7 +773,7 @@ class DirectoriesStep(SetupStep):
 
         if root:
             self.server_root.setText(
-                root
+                str(root)
             )
 
         self.documents.setText(
@@ -618,19 +812,22 @@ class DirectoriesStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# PostgreSQL
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 3. PostgreSQL
+# ===========================================================================
 
 class PostgreSQLStep(SetupStep):
+
     def __init__(
         self,
-        parent=None,
+        parent: QWidget | None = None,
     ):
         super().__init__(
             "3. PostgreSQL",
-            "Configure the PostgreSQL endpoint. "
-            "Database creation and migrations are separate operations.",
+            (
+                "Configure the PostgreSQL endpoint. "
+                "Database creation and migrations are separate operations."
+            ),
             parent,
         )
 
@@ -638,17 +835,21 @@ class PostgreSQLStep(SetupStep):
             "PostgreSQL"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         self.host = QLineEdit(
             "localhost"
         )
 
         self.port = QSpinBox()
+
         self.port.setRange(
             1,
             65535,
         )
+
         self.port.setValue(
             DEFAULT_POSTGRES_PORT
         )
@@ -662,6 +863,7 @@ class PostgreSQLStep(SetupStep):
         )
 
         self.password = QLineEdit()
+
         self.password.setEchoMode(
             QLineEdit.Password
         )
@@ -670,18 +872,22 @@ class PostgreSQLStep(SetupStep):
             "Host:",
             self.host,
         )
+
         form.addRow(
             "Port:",
             self.port,
         )
+
         form.addRow(
             "Database:",
             self.database,
         )
+
         form.addRow(
             "User:",
             self.user,
         )
+
         form.addRow(
             "Password:",
             self.password,
@@ -693,6 +899,10 @@ class PostgreSQLStep(SetupStep):
 
         self.status = QLabel(
             "Not tested."
+        )
+
+        self.status.setWordWrap(
+            True
         )
 
         self.content_layout.addWidget(
@@ -712,21 +922,35 @@ class PostgreSQLStep(SetupStep):
         )
 
         info = QLabel(
-            "The password is not written to the Alcalay configuration file."
+            (
+                "The PostgreSQL password is never written "
+                "to the Alcalay JSON configuration."
+            )
         )
-        info.setWordWrap(True)
+
+        info.setWordWrap(
+            True
+        )
 
         self.content_layout.addWidget(
             info
         )
 
-    def test_connection(self):
+    def test_connection(
+        self,
+    ) -> None:
+
         try:
-            from setup_database import check_postgresql
+            check_postgresql = (
+                import_database_checker()
+            )
+
+            window = find_setup_window(
+                self
+            )
 
             configuration = (
-                self.parent_window()
-                .build_current_configuration()
+                window.build_current_configuration()
             )
 
             result = check_postgresql(
@@ -738,36 +962,34 @@ class PostgreSQLStep(SetupStep):
             )
 
         except Exception as exc:
+
             self.status.setText(
                 f"PostgreSQL check failed: {exc}"
             )
 
-    def parent_window(self):
-        widget = self.parent()
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
 
-        while widget is not None:
-            if isinstance(
-                widget,
-                SetupWindow,
-            ):
-                return widget
-
-            widget = widget.parent()
-
-        raise RuntimeError(
-            "SetupWindow parent was not found."
-        )
-
-    def collect_state(self):
         return {
-            "host": self.host.text().strip(),
+            "host": (
+                self.host.text().strip()
+            ),
             "port": self.port.value(),
-            "database": self.database.text().strip(),
-            "user": self.user.text().strip(),
+            "database": (
+                self.database.text().strip()
+            ),
+            "user": (
+                self.user.text().strip()
+            ),
             "password": self.password.text(),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -780,7 +1002,9 @@ class PostgreSQLStep(SetupStep):
 
         self.port.setValue(
             safe_int(
-                state.get("port"),
+                state.get(
+                    "port"
+                ),
                 DEFAULT_POSTGRES_PORT,
             )
         )
@@ -799,13 +1023,20 @@ class PostgreSQLStep(SetupStep):
             )
         )
 
+        # Password is intentionally not loaded from JSON.
+        self.password.clear()
 
-# ---------------------------------------------------------------------------
-# Google Drive
-# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# 4. Google Drive
+# ===========================================================================
 
 class GoogleDriveStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "4. Google Drive",
             "Configure the Google Drive source.",
@@ -819,6 +1050,7 @@ class GoogleDriveStep(SetupStep):
         self.root = QLineEdit()
 
         self.sync_mode = QComboBox()
+
         self.sync_mode.addItems(
             [
                 "Configured root",
@@ -834,7 +1066,9 @@ class GoogleDriveStep(SetupStep):
             "Google Drive"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         form.addRow(
             "Root / address:",
@@ -854,24 +1088,43 @@ class GoogleDriveStep(SetupStep):
             "OAuth connection has not been performed."
         )
 
+        self.status.setWordWrap(
+            True
+        )
+
         self.content_layout.addWidget(
             self.status
         )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "enabled": self.enabled.isChecked(),
-            "root": self.root.text().strip(),
-            "sync_mode": self.sync_mode.currentText(),
+            "enabled": (
+                self.enabled.isChecked()
+            ),
+            "root": (
+                self.root.text().strip()
+            ),
+            "sync_mode": (
+                self.sync_mode.currentText()
+            ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
         self.enabled.setChecked(
             bool_from_value(
-                state.get("enabled")
+                state.get(
+                    "enabled"
+                )
             )
         )
 
@@ -890,16 +1143,22 @@ class GoogleDriveStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# Gmail
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 5. Gmail
+# ===========================================================================
 
 class GmailStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "5. Gmail",
-            "Configure incremental Gmail synchronization. "
-            "The entire mailbox is never synchronized automatically.",
+            (
+                "Configure incremental Gmail synchronization. "
+                "The entire mailbox is never synchronized automatically."
+            ),
             parent,
         )
 
@@ -920,33 +1179,50 @@ class GmailStep(SetupStep):
         self.selected_only = QCheckBox(
             "Selected labels only"
         )
-        self.selected_only.setChecked(True)
+
+        self.selected_only.setChecked(
+            True
+        )
 
         self.attachments = QCheckBox(
             "Download relevant attachments"
         )
-        self.attachments.setChecked(True)
+
+        self.attachments.setChecked(
+            True
+        )
 
         self.body_indexing = QCheckBox(
             "Index message body"
         )
-        self.body_indexing.setChecked(True)
+
+        self.body_indexing.setChecked(
+            True
+        )
 
         self.incremental = QCheckBox(
             "Incremental synchronization"
         )
-        self.incremental.setChecked(True)
+
+        self.incremental.setChecked(
+            True
+        )
 
         self.history_id = QCheckBox(
             "Use Gmail historyId"
         )
-        self.history_id.setChecked(True)
+
+        self.history_id.setChecked(
+            True
+        )
 
         group = QGroupBox(
             "Gmail Account"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         form.addRow(
             "Account ID:",
@@ -970,15 +1246,19 @@ class GmailStep(SetupStep):
         self.content_layout.addWidget(
             self.selected_only
         )
+
         self.content_layout.addWidget(
             self.attachments
         )
+
         self.content_layout.addWidget(
             self.body_indexing
         )
+
         self.content_layout.addWidget(
             self.incremental
         )
+
         self.content_layout.addWidget(
             self.history_id
         )
@@ -987,21 +1267,36 @@ class GmailStep(SetupStep):
             "OAuth connection has not been performed."
         )
 
+        self.status.setWordWrap(
+            True
+        )
+
         self.content_layout.addWidget(
             self.status
         )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         labels = [
             item.strip()
-            for item in self.labels.text().split(",")
+            for item in (
+                self.labels.text().split(",")
+            )
             if item.strip()
         ]
 
         return {
-            "enabled": self.enabled.isChecked(),
-            "account_id": self.account_id.text().strip(),
-            "email": self.email.text().strip(),
+            "enabled": (
+                self.enabled.isChecked()
+            ),
+            "account_id": (
+                self.account_id.text().strip()
+            ),
+            "email": (
+                self.email.text().strip()
+            ),
             "labels": labels,
             "selected_labels_only": (
                 self.selected_only.isChecked()
@@ -1020,13 +1315,19 @@ class GmailStep(SetupStep):
             ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
         self.enabled.setChecked(
             bool_from_value(
-                state.get("enabled")
+                state.get(
+                    "enabled"
+                )
             )
         )
 
@@ -1049,9 +1350,15 @@ class GmailStep(SetupStep):
             [],
         )
 
-        if isinstance(labels, list):
+        if isinstance(
+            labels,
+            list,
+        ):
             self.labels.setText(
-                ",".join(labels)
+                ",".join(
+                    str(item)
+                    for item in labels
+                )
             )
 
         self.selected_only.setChecked(
@@ -1105,12 +1412,16 @@ class GmailStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# Processing
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 6. Processing
+# ===========================================================================
 
 class ProcessingStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "6. Processing",
             "Configure document processing.",
@@ -1120,15 +1431,19 @@ class ProcessingStep(SetupStep):
         self.text = QCheckBox(
             "Text extraction"
         )
+
         self.metadata = QCheckBox(
             "Metadata extraction"
         )
+
         self.classification = QCheckBox(
             "Document classification"
         )
+
         self.keywords = QCheckBox(
             "Keywords"
         )
+
         self.thesaurus = QCheckBox(
             "Thesaurus / עיין ערך"
         )
@@ -1140,21 +1455,41 @@ class ProcessingStep(SetupStep):
             self.keywords,
             self.thesaurus,
         ]:
-            checkbox.setChecked(True)
+            checkbox.setChecked(
+                True
+            )
+
             self.content_layout.addWidget(
                 checkbox
             )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "text_extraction": self.text.isChecked(),
-            "metadata_extraction": self.metadata.isChecked(),
-            "classification": self.classification.isChecked(),
-            "keywords": self.keywords.isChecked(),
-            "thesaurus": self.thesaurus.isChecked(),
+            "text_extraction": (
+                self.text.isChecked()
+            ),
+            "metadata_extraction": (
+                self.metadata.isChecked()
+            ),
+            "classification": (
+                self.classification.isChecked()
+            ),
+            "keywords": (
+                self.keywords.isChecked()
+            ),
+            "thesaurus": (
+                self.thesaurus.isChecked()
+            ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -1209,12 +1544,16 @@ class ProcessingStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# OCR
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 7. OCR
+# ===========================================================================
 
 class OCRStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "7. OCR",
             "Configure OCR for scanned/image documents.",
@@ -1224,9 +1563,13 @@ class OCRStep(SetupStep):
         self.enabled = QCheckBox(
             "Enable OCR"
         )
-        self.enabled.setChecked(True)
+
+        self.enabled.setChecked(
+            True
+        )
 
         self.language = QComboBox()
+
         self.language.addItems(
             [
                 "heb+eng",
@@ -1238,7 +1581,10 @@ class OCRStep(SetupStep):
         self.automatic = QCheckBox(
             "Automatic OCR"
         )
-        self.automatic.setChecked(True)
+
+        self.automatic.setChecked(
+            True
+        )
 
         form = QFormLayout()
 
@@ -1250,21 +1596,36 @@ class OCRStep(SetupStep):
         self.content_layout.addWidget(
             self.enabled
         )
+
         self.content_layout.addLayout(
             form
         )
+
         self.content_layout.addWidget(
             self.automatic
         )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "enabled": self.enabled.isChecked(),
-            "language": self.language.currentText(),
-            "automatic": self.automatic.isChecked(),
+            "enabled": (
+                self.enabled.isChecked()
+            ),
+            "language": (
+                self.language.currentText()
+            ),
+            "automatic": (
+                self.automatic.isChecked()
+            ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -1296,12 +1657,16 @@ class OCRStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# AI / ML
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 8. AI / ML
+# ===========================================================================
 
 class AIMLStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "8. AI / ML",
             "Configure semantic processing and machine learning.",
@@ -1311,22 +1676,18 @@ class AIMLStep(SetupStep):
         self.enabled = QCheckBox(
             "Enable AI / ML"
         )
-        self.enabled.setChecked(True)
 
         self.semantic = QCheckBox(
             "Semantic understanding"
         )
-        self.semantic.setChecked(True)
 
         self.classification = QCheckBox(
             "AI classification"
         )
-        self.classification.setChecked(True)
 
         self.similarity = QCheckBox(
             "Similar-document analysis"
         )
-        self.similarity.setChecked(True)
 
         for checkbox in [
             self.enabled,
@@ -1334,19 +1695,38 @@ class AIMLStep(SetupStep):
             self.classification,
             self.similarity,
         ]:
+            checkbox.setChecked(
+                True
+            )
+
             self.content_layout.addWidget(
                 checkbox
             )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "enabled": self.enabled.isChecked(),
-            "semantic": self.semantic.isChecked(),
-            "classification": self.classification.isChecked(),
-            "similarity": self.similarity.isChecked(),
+            "enabled": (
+                self.enabled.isChecked()
+            ),
+            "semantic": (
+                self.semantic.isChecked()
+            ),
+            "classification": (
+                self.classification.isChecked()
+            ),
+            "similarity": (
+                self.similarity.isChecked()
+            ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -1391,12 +1771,16 @@ class AIMLStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# Search
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 9. Search
+# ===========================================================================
 
 class SearchStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "9. Search",
             "Configure unified search.",
@@ -1406,15 +1790,19 @@ class SearchStep(SetupStep):
         self.full_text = QCheckBox(
             "Full-text search"
         )
+
         self.metadata = QCheckBox(
             "Metadata search"
         )
+
         self.semantic = QCheckBox(
             "Semantic search"
         )
+
         self.boolean = QCheckBox(
             "Boolean search"
         )
+
         self.reindex = QCheckBox(
             "Reindex changed documents"
         )
@@ -1426,23 +1814,41 @@ class SearchStep(SetupStep):
             self.boolean,
             self.reindex,
         ]:
-            checkbox.setChecked(True)
+            checkbox.setChecked(
+                True
+            )
+
             self.content_layout.addWidget(
                 checkbox
             )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
-            "full_text": self.full_text.isChecked(),
-            "metadata": self.metadata.isChecked(),
-            "semantic": self.semantic.isChecked(),
-            "boolean": self.boolean.isChecked(),
+            "full_text": (
+                self.full_text.isChecked()
+            ),
+            "metadata": (
+                self.metadata.isChecked()
+            ),
+            "semantic": (
+                self.semantic.isChecked()
+            ),
+            "boolean": (
+                self.boolean.isChecked()
+            ),
             "reindex_changed_documents": (
                 self.reindex.isChecked()
             ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -1497,12 +1903,16 @@ class SearchStep(SetupStep):
         )
 
 
-# ---------------------------------------------------------------------------
-# Security
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 10. Security
+# ===========================================================================
 
 class SecurityStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "10. Security",
             "Configure authentication and transport security.",
@@ -1512,14 +1922,21 @@ class SecurityStep(SetupStep):
         self.authentication = QCheckBox(
             "Authentication required"
         )
-        self.authentication.setChecked(True)
+
+        self.authentication.setChecked(
+            True
+        )
 
         self.tls = QCheckBox(
             "TLS / HTTPS required"
         )
-        self.tls.setChecked(True)
+
+        self.tls.setChecked(
+            True
+        )
 
         self.secret = QLineEdit()
+
         self.secret.setEchoMode(
             QLineEdit.Password
         )
@@ -1528,7 +1945,9 @@ class SecurityStep(SetupStep):
             "Security Policy"
         )
 
-        form = QFormLayout(group)
+        form = QFormLayout(
+            group
+        )
 
         form.addRow(
             "API secret:",
@@ -1538,38 +1957,73 @@ class SecurityStep(SetupStep):
         self.content_layout.addWidget(
             self.authentication
         )
+
         self.content_layout.addWidget(
             self.tls
         )
+
         self.content_layout.addWidget(
             group
         )
 
-        info = QLabel(
-            "The API secret is not written to the JSON configuration."
+        self.generate_button = QPushButton(
+            "Generate API Secret"
         )
-        info.setWordWrap(True)
+
+        self.generate_button.clicked.connect(
+            self.generate_secret
+        )
+
+        self.content_layout.addWidget(
+            self.generate_button
+        )
+
+        info = QLabel(
+            (
+                "The API secret is not written to the JSON "
+                "configuration file."
+            )
+        )
+
+        info.setWordWrap(
+            True
+        )
 
         self.content_layout.addWidget(
             info
         )
 
-    def generate_secret(self):
+    def generate_secret(
+        self,
+    ) -> None:
+
         try:
-            from setup_auth import generate_api_secret
+            try:
+                from setup_auth import (
+                    generate_api_secret
+                )
+
+            except ImportError:
+                from .setup_auth import (
+                    generate_api_secret
+                )
 
             self.secret.setText(
                 generate_api_secret()
             )
 
         except Exception as exc:
+
             QMessageBox.critical(
                 self,
                 "Security Error",
                 str(exc),
             )
 
-    def collect_state(self):
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         return {
             "authentication_required": (
                 self.authentication.isChecked()
@@ -1582,7 +2036,11 @@ class SecurityStep(SetupStep):
             ),
         }
 
-    def apply_state(self, state):
+    def apply_state(
+        self,
+        state: dict[str, Any],
+    ) -> None:
+
         if not state:
             return
 
@@ -1606,13 +2064,20 @@ class SecurityStep(SetupStep):
             )
         )
 
+        # The actual secret is deliberately never loaded.
+        self.secret.clear()
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
+
+# ===========================================================================
+# 11. Validation
+# ===========================================================================
 
 class ValidationStep(SetupStep):
-    def __init__(self, parent=None):
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ):
         super().__init__(
             "11. Validation",
             "Run the complete Alcalay setup checks.",
@@ -1623,17 +2088,27 @@ class ValidationStep(SetupStep):
             "No validation has been executed."
         )
 
+        self.status.setWordWrap(
+            True
+        )
+
         self.progress = QProgressBar()
+
         self.progress.setRange(
             0,
             100,
         )
+
         self.progress.setValue(
             0
         )
 
         self.report = QPlainTextEdit()
-        self.report.setReadOnly(True)
+
+        self.report.setReadOnly(
+            True
+        )
+
         self.report.setMinimumHeight(
             300
         )
@@ -1641,17 +2116,23 @@ class ValidationStep(SetupStep):
         self.content_layout.addWidget(
             self.status
         )
+
         self.content_layout.addWidget(
             self.progress
         )
+
         self.content_layout.addWidget(
             self.report
         )
 
-    def set_running(self):
+    def set_running(
+        self,
+    ) -> None:
+
         self.status.setText(
             "Running setup checks..."
         )
+
         self.progress.setRange(
             0,
             0,
@@ -1662,36 +2143,42 @@ class ValidationStep(SetupStep):
         success: bool,
         message: str,
         report: Any,
-    ):
+    ) -> None:
+
         self.progress.setRange(
             0,
             100,
         )
+
         self.progress.setValue(
             100 if success else 50
         )
 
-        self.status.setText(
-            (
+        if success:
+
+            self.status.setText(
                 "Setup checks completed successfully."
-                if success
-                else
+            )
+
+        else:
+
+            self.status.setText(
                 "Setup checks completed with failures."
             )
-        )
 
         self.report.setPlainText(
-            message
+            str(message)
             + "\n\n"
             + safe_json(report)
         )
 
 
-# ---------------------------------------------------------------------------
+# ===========================================================================
 # Main Setup Window
-# ---------------------------------------------------------------------------
+# ===========================================================================
 
 class SetupWindow(QMainWindow):
+
     def __init__(self):
         super().__init__()
 
@@ -1712,13 +2199,17 @@ class SetupWindow(QMainWindow):
         self.steps: list[SetupStep] = []
 
         self.build_ui()
+
         self.load_existing_config()
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # UI
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
-    def build_ui(self):
+    def build_ui(
+        self,
+    ) -> None:
+
         central = QWidget()
 
         root_layout = QVBoxLayout(
@@ -1738,6 +2229,7 @@ class SetupWindow(QMainWindow):
         title = QLabel(
             "ALCALAY"
         )
+
         title.setObjectName(
             "appTitle"
         )
@@ -1745,6 +2237,7 @@ class SetupWindow(QMainWindow):
         subtitle = QLabel(
             "Central Server Setup"
         )
+
         subtitle.setObjectName(
             "appSubtitle"
         )
@@ -1752,9 +2245,11 @@ class SetupWindow(QMainWindow):
         header.addWidget(
             title
         )
+
         header.addWidget(
             subtitle
         )
+
         header.addStretch()
 
         os_label = QLabel(
@@ -1772,16 +2267,19 @@ class SetupWindow(QMainWindow):
         # Main area
         main_layout = QHBoxLayout()
 
-        # Left navigation
+        # Navigation
         self.navigation = QVBoxLayout()
+
         self.navigation.setSpacing(
             4
         )
 
         navigation_widget = QWidget()
+
         navigation_widget.setLayout(
             self.navigation
         )
+
         navigation_widget.setMaximumWidth(
             240
         )
@@ -1791,17 +2289,27 @@ class SetupWindow(QMainWindow):
         # Stack
         self.stack = QStackedWidget()
 
-        # Steps
+        # Setup pages
         self.server_step = ServerStep()
+
         self.directories_step = DirectoriesStep()
+
         self.postgres_step = PostgreSQLStep()
+
         self.drive_step = GoogleDriveStep()
+
         self.gmail_step = GmailStep()
+
         self.processing_step = ProcessingStep()
+
         self.ocr_step = OCRStep()
+
         self.ai_step = AIMLStep()
+
         self.search_step = SearchStep()
+
         self.security_step = SecurityStep()
+
         self.validation_step = ValidationStep()
 
         self.steps = [
@@ -1821,19 +2329,32 @@ class SetupWindow(QMainWindow):
         for index, step in enumerate(
             self.steps
         ):
+
             scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(step)
+
+            scroll.setWidgetResizable(
+                True
+            )
+
+            scroll.setWidget(
+                step
+            )
 
             self.stack.addWidget(
                 scroll
             )
 
             button = QPushButton(
-                f"{index + 1}. {step.title.split('.', 1)[-1].strip()}"
+                (
+                    f"{index + 1}. "
+                    f"{step.title.split('.', 1)[-1].strip()}"
+                )
             )
 
-            button.setCheckable(True)
+            button.setCheckable(
+                True
+            )
+
             button.clicked.connect(
                 lambda checked=False,
                 i=index: self.show_step(i)
@@ -1863,7 +2384,7 @@ class SetupWindow(QMainWindow):
             1,
         )
 
-        # Action buttons
+        # Actions
         actions_group = QGroupBox(
             "Setup Actions"
         )
@@ -1899,18 +2420,23 @@ class SetupWindow(QMainWindow):
         actions.addWidget(
             self.detect_button
         )
+
         actions.addWidget(
             self.validate_button
         )
+
         actions.addWidget(
             self.prepare_button
         )
+
         actions.addWidget(
             self.full_setup_button
         )
+
         actions.addWidget(
             self.save_button
         )
+
         actions.addWidget(
             self.finish_button
         )
@@ -1952,19 +2478,27 @@ class SetupWindow(QMainWindow):
             0
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Navigation
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def show_step(
         self,
         index: int,
-    ):
+    ) -> None:
+
+        if not self.steps:
+            return
+
         if index < 0:
             index = 0
 
-        if index >= len(self.steps):
-            index = len(self.steps) - 1
+        if index >= len(
+            self.steps
+        ):
+            index = len(
+                self.steps
+            ) - 1
 
         self.stack.setCurrentIndex(
             index
@@ -1973,42 +2507,57 @@ class SetupWindow(QMainWindow):
         for i, button in enumerate(
             self.nav_buttons
         ):
+
             button.setChecked(
                 i == index
             )
 
-    # ------------------------------------------------------------------
-    # Configuration
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Configuration state
+    # -----------------------------------------------------------------------
 
-    def collect_state(self) -> dict[str, Any]:
+    def collect_state(
+        self,
+    ) -> dict[str, Any]:
+
         state: dict[str, Any] = {}
 
-        server = self.server_step.collect_state()
+        server = (
+            self.server_step.collect_state()
+        )
+
         directories = (
             self.directories_step.collect_state()
         )
+
         postgres = (
             self.postgres_step.collect_state()
         )
+
         drive = (
             self.drive_step.collect_state()
         )
+
         gmail = (
             self.gmail_step.collect_state()
         )
+
         processing = (
             self.processing_step.collect_state()
         )
+
         ocr = (
             self.ocr_step.collect_state()
         )
+
         ai_ml = (
             self.ai_step.collect_state()
         )
+
         search = (
             self.search_step.collect_state()
         )
+
         security = (
             self.security_step.collect_state()
         )
@@ -2051,6 +2600,7 @@ class SetupWindow(QMainWindow):
             "timestamp_tracking": True,
         }
 
+        # Git policy.
         state["git_policy"] = {
             "store_source_code": True,
             "store_configuration_templates": True,
@@ -2068,19 +2618,28 @@ class SetupWindow(QMainWindow):
     def build_current_configuration(
         self,
     ) -> dict[str, Any]:
+
         state = self.collect_state()
 
         return build_configuration(
             state
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Existing configuration
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
-    def configuration_path(self) -> Path:
-        root = Path(
+    def configuration_path(
+        self,
+    ) -> Path:
+
+        root_text = (
             self.directories_step.server_root.text()
+            .strip()
+        )
+
+        root = Path(
+            root_text
         ).expanduser()
 
         return (
@@ -2089,13 +2648,17 @@ class SetupWindow(QMainWindow):
             / "alcalay_config.json"
         )
 
-    def load_existing_config(self):
+    def load_existing_config(
+        self,
+    ) -> None:
+
         path = self.configuration_path()
 
         if not path.exists():
             return
 
         try:
+
             configuration = load_configuration(
                 path
             )
@@ -2105,16 +2668,21 @@ class SetupWindow(QMainWindow):
             )
 
         except Exception as exc:
+
             QMessageBox.warning(
                 self,
                 "Configuration",
-                f"Existing configuration could not be loaded:\n{exc}",
+                (
+                    "Existing configuration could not "
+                    f"be loaded:\n{exc}"
+                ),
             )
 
     def apply_configuration(
         self,
         configuration: dict[str, Any],
-    ):
+    ) -> None:
+
         server = configuration.get(
             "server",
             {},
@@ -2130,28 +2698,19 @@ class SetupWindow(QMainWindow):
             {},
         )
 
-        google_drive = (
-            configuration
-            .get(
-                "sources",
-                {},
-            )
-            .get(
-                "google_drive",
-                {},
-            )
+        sources = configuration.get(
+            "sources",
+            {},
         )
 
-        gmail_root = (
-            configuration
-            .get(
-                "sources",
-                {},
-            )
-            .get(
-                "gmail",
-                {},
-            )
+        google_drive = sources.get(
+            "google_drive",
+            {},
+        )
+
+        gmail_root = sources.get(
+            "gmail",
+            {},
         )
 
         gmail_accounts = gmail_root.get(
@@ -2230,12 +2789,16 @@ class SetupWindow(QMainWindow):
             security
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Auto detection
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
-    def auto_detect(self):
+    def auto_detect(
+        self,
+    ) -> None:
+
         try:
+
             configuration = (
                 self.build_current_configuration()
             )
@@ -2284,25 +2847,32 @@ class SetupWindow(QMainWindow):
                 ),
             )
 
+            detection = result.to_dict()
+
             self.apply_detection(
-                result.to_dict()
+                detection
             )
 
             self.show_detection_result(
-                result.to_dict()
+                detection
             )
 
         except Exception as exc:
+
             QMessageBox.critical(
                 self,
                 "Auto Detect",
-                f"Automatic detection failed:\n{exc}",
+                (
+                    "Automatic detection failed:\n"
+                    f"{exc}"
+                ),
             )
 
     def apply_detection(
         self,
         detection: dict[str, Any],
-    ):
+    ) -> None:
+
         os_name = detection.get(
             "operating_system",
             detect_os(),
@@ -2315,7 +2885,8 @@ class SetupWindow(QMainWindow):
         self.server_step.server_name.setText(
             detection.get(
                 "machine_name",
-                platform.node(),
+                platform.node()
+                or "AlcalayServer",
             )
         )
 
@@ -2324,16 +2895,19 @@ class SetupWindow(QMainWindow):
         )
 
         if root:
+
             self.directories_step.server_root.setText(
-                root
+                str(root)
             )
+
             self.directories_step.derive_paths()
 
         api_port = detection.get(
             "api_port"
         )
 
-        if api_port:
+        if api_port is not None:
+
             self.server_step.api_port.setValue(
                 safe_int(
                     api_port,
@@ -2346,15 +2920,17 @@ class SetupWindow(QMainWindow):
         )
 
         if postgres_host:
+
             self.postgres_step.host.setText(
-                postgres_host
+                str(postgres_host)
             )
 
         postgres_port = detection.get(
             "postgres_port"
         )
 
-        if postgres_port:
+        if postgres_port is not None:
+
             self.postgres_step.port.setValue(
                 safe_int(
                     postgres_port,
@@ -2365,7 +2941,8 @@ class SetupWindow(QMainWindow):
     def show_detection_result(
         self,
         detection: dict[str, Any],
-    ):
+    ) -> None:
+
         text = (
             "Alcalay automatic detection\n"
             "===========================\n\n"
@@ -2381,14 +2958,16 @@ class SetupWindow(QMainWindow):
             text,
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Validation
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def validate_current(
         self,
     ) -> bool:
+
         try:
+
             configuration = (
                 self.build_current_configuration()
             )
@@ -2416,6 +2995,7 @@ class SetupWindow(QMainWindow):
             return success
 
         except Exception as exc:
+
             self.validation_step.set_result(
                 False,
                 str(exc),
@@ -2432,10 +3012,12 @@ class SetupWindow(QMainWindow):
         self,
         result: Any,
     ) -> tuple[bool, str]:
+
         if isinstance(
             result,
             bool,
         ):
+
             return (
                 result,
                 (
@@ -2450,6 +3032,7 @@ class SetupWindow(QMainWindow):
             result,
             dict,
         ):
+
             success = result.get(
                 "success"
             )
@@ -2461,9 +3044,52 @@ class SetupWindow(QMainWindow):
 
             if success is None:
                 success = result.get(
-                    "ok",
-                    False,
+                    "ok"
                 )
+
+            if success is None:
+                # Some validators return a result dictionary
+                # containing a list of validation results.
+                results = result.get(
+                    "results"
+                )
+
+                if isinstance(
+                    results,
+                    list,
+                ):
+
+                    failures = 0
+
+                    for item in results:
+
+                        if isinstance(
+                            item,
+                            dict,
+                        ):
+
+                            item_success = item.get(
+                                "success"
+                            )
+
+                            if item_success is None:
+                                item_success = item.get(
+                                    "valid"
+                                )
+
+                            if item_success is None:
+                                item_success = item.get(
+                                    "ok",
+                                    True,
+                                )
+
+                            if not item_success:
+                                failures += 1
+
+                    success = failures == 0
+
+                else:
+                    success = False
 
             return (
                 bool(success),
@@ -2475,13 +3101,14 @@ class SetupWindow(QMainWindow):
             str(result),
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Prepare server
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def prepare_current(
         self,
-    ):
+    ) -> None:
+
         answer = QMessageBox.question(
             self,
             "Prepare Server",
@@ -2500,6 +3127,7 @@ class SetupWindow(QMainWindow):
             return
 
         try:
+
             configuration = (
                 self.build_current_configuration()
             )
@@ -2509,12 +3137,15 @@ class SetupWindow(QMainWindow):
             )
 
             if result.success:
+
                 QMessageBox.information(
                     self,
                     "Prepare Server",
                     result.message,
                 )
+
             else:
+
                 QMessageBox.warning(
                     self,
                     "Prepare Server",
@@ -2522,19 +3153,21 @@ class SetupWindow(QMainWindow):
                 )
 
         except Exception as exc:
+
             QMessageBox.critical(
                 self,
                 "Prepare Server",
                 str(exc),
             )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Full setup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def full_setup(
         self,
-    ):
+    ) -> None:
+
         answer = QMessageBox.question(
             self,
             "Run Full Setup",
@@ -2553,6 +3186,7 @@ class SetupWindow(QMainWindow):
             return
 
         self.validation_step.set_running()
+
         self.show_step(
             10
         )
@@ -2560,6 +3194,7 @@ class SetupWindow(QMainWindow):
         QApplication.processEvents()
 
         try:
+
             configuration = (
                 self.build_current_configuration()
             )
@@ -2575,12 +3210,15 @@ class SetupWindow(QMainWindow):
             )
 
             if execution.success:
+
                 QMessageBox.information(
                     self,
                     "Full Setup",
                     execution.message,
                 )
+
             else:
+
                 QMessageBox.warning(
                     self,
                     "Full Setup",
@@ -2588,6 +3226,7 @@ class SetupWindow(QMainWindow):
                 )
 
         except Exception as exc:
+
             self.validation_step.set_result(
                 False,
                 f"Full setup failed: {exc}",
@@ -2600,14 +3239,16 @@ class SetupWindow(QMainWindow):
                 str(exc),
             )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Save
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def save_configuration(
         self,
     ) -> bool:
+
         try:
+
             configuration = (
                 self.build_current_configuration()
             )
@@ -2616,13 +3257,14 @@ class SetupWindow(QMainWindow):
                 configuration
             )
 
-            valid, message = (
+            valid, _message = (
                 self.interpret_validation_result(
                     result
                 )
             )
 
             if not valid:
+
                 answer = QMessageBox.question(
                     self,
                     "Validation",
@@ -2658,6 +3300,7 @@ class SetupWindow(QMainWindow):
             return True
 
         except Exception as exc:
+
             QMessageBox.critical(
                 self,
                 "Save Configuration",
@@ -2666,13 +3309,14 @@ class SetupWindow(QMainWindow):
 
             return False
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Finish
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def finish_setup(
         self,
-    ):
+    ) -> None:
+
         if not self.save_configuration():
             return
 
@@ -2694,14 +3338,15 @@ class SetupWindow(QMainWindow):
 
         self.close()
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Close
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def closeEvent(
         self,
         event,
-    ):
+    ) -> None:
+
         answer = QMessageBox.question(
             self,
             "Exit Setup",
@@ -2715,26 +3360,32 @@ class SetupWindow(QMainWindow):
         )
 
         if answer == QMessageBox.Save:
+
             if self.save_configuration():
                 event.accept()
+
             else:
                 event.ignore()
 
         elif answer == QMessageBox.Discard:
+
             event.accept()
 
         else:
+
             event.ignore()
 
 
-# ---------------------------------------------------------------------------
-# Application
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Application styling
+# ===========================================================================
 
 def apply_style(
     application: QApplication,
-):
+) -> None:
+
     font = choose_ui_font()
+
     application.setFont(
         font
     )
@@ -2798,7 +3449,12 @@ def apply_style(
     )
 
 
-def main():
+# ===========================================================================
+# Main
+# ===========================================================================
+
+def main() -> None:
+
     application = QApplication(
         sys.argv
     )
@@ -2807,11 +3463,16 @@ def main():
         APP_NAME
     )
 
+    application.setApplicationVersion(
+        SETUP_VERSION
+    )
+
     apply_style(
         application
     )
 
     window = SetupWindow()
+
     window.show()
 
     sys.exit(
