@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import platform
 import socket
 from datetime import datetime, timezone
@@ -19,9 +18,9 @@ CONFIG_FILENAME = "alcalay_config.json"
 ENV_EXAMPLE_FILENAME = ".env.example"
 
 
-# ---------------------------------------------------------------------------
-# General helpers
-# ---------------------------------------------------------------------------
+# ============================================================================
+# GENERAL
+# ============================================================================
 
 def now_iso() -> str:
     """Return current UTC timestamp in ISO-8601 format."""
@@ -48,133 +47,303 @@ def is_valid_port(value: Any) -> bool:
         return False
 
 
-def tcp_test(host: str, port: int, timeout: float = 3.0) -> tuple[bool, str]:
+def tcp_test(
+    host: str,
+    port: int,
+    timeout: float = 3.0,
+) -> tuple[bool, str]:
     """
-    Test whether a TCP endpoint can be reached.
+    Test TCP connectivity.
 
     This does NOT authenticate to PostgreSQL.
-    It only verifies TCP connectivity.
     """
+
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True, f"TCP connection successful: {host}:{port}"
+        with socket.create_connection(
+            (host, port),
+            timeout=timeout,
+        ):
+            return True, (
+                f"TCP connection successful: "
+                f"{host}:{port}"
+            )
+
     except socket.timeout:
-        return False, f"Connection timeout: {host}:{port}"
+        return False, (
+            f"Connection timeout: "
+            f"{host}:{port}"
+        )
+
     except OSError as exc:
-        return False, f"Connection failed: {exc}"
+        return False, (
+            f"Connection failed: {exc}"
+        )
 
 
-# ---------------------------------------------------------------------------
-# Default paths
-# ---------------------------------------------------------------------------
+# ============================================================================
+# DEFAULT SERVER PATHS
+# ============================================================================
 
-def default_server_root(server_os: str | None = None) -> Path:
+def default_server_root(
+    server_os: str | None = None,
+) -> Path:
     """
-    Return a sensible default server root for the selected server OS.
-
-    The path is only a configuration default. It is not automatically used
-    to perform remote operations on another machine.
+    Return a platform-appropriate server root.
     """
-    selected_os = (server_os or platform.system()).strip().lower()
 
-    if selected_os in {"windows", "win32", "win"}:
+    selected_os = (
+        server_os or platform.system()
+    ).strip().lower()
+
+    if selected_os in {
+        "windows",
+        "win32",
+        "win",
+    }:
         return Path(r"C:\AlcalayServer")
 
     return Path.home() / "AlcalayServer"
 
 
-# ---------------------------------------------------------------------------
-# Configuration construction
-# ---------------------------------------------------------------------------
-
-def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
+def build_default_paths(
+    server_os: str | None = None,
+) -> dict[str, str]:
     """
-    Convert the flat UI state into the canonical Alcalay configuration.
-
-    The UI is intentionally not responsible for the final configuration
-    structure. This function is the central mapping point.
+    Build all default Alcalay server paths.
     """
 
-    server = ui_state.get("server", {})
-    paths = ui_state.get("paths", {})
-    postgres = ui_state.get("postgresql", {})
-    google_drive = ui_state.get("google_drive", {})
-    gmail = ui_state.get("gmail", {})
-    processing = ui_state.get("processing", {})
-    ocr = ui_state.get("ocr", {})
-    ai_ml = ui_state.get("ai_ml", {})
-    search = ui_state.get("search", {})
-    security = ui_state.get("security", {})
+    root = default_server_root(server_os)
 
-    server_os = server.get("server_os") or platform.system()
+    return {
+        "app_root": normalize_path(root),
+        "documents": normalize_path(
+            root / "documents"
+        ),
+        "search_index": normalize_path(
+            root / "search_index"
+        ),
+        "backups": normalize_path(
+            root / "backups"
+        ),
+        "logs": normalize_path(
+            root / "logs"
+        ),
+        "config": normalize_path(
+            root / "config"
+        ),
+        "data": normalize_path(
+            root / "data"
+        ),
+        "runtime": normalize_path(
+            root / "runtime"
+        ),
+    }
+
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+def build_configuration(
+    ui_state: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Convert UI state into canonical Alcalay configuration.
+
+    This function does not:
+        - install software
+        - connect to PostgreSQL
+        - connect to Gmail
+        - connect to Google Drive
+        - start services
+
+    It only builds configuration.
+    """
+
+    server = ui_state.get(
+        "server",
+        {},
+    )
+
+    paths = ui_state.get(
+        "paths",
+        {},
+    )
+
+    postgres = ui_state.get(
+        "postgresql",
+        {},
+    )
+
+    google_drive = ui_state.get(
+        "google_drive",
+        {},
+    )
+
+    gmail = ui_state.get(
+        "gmail",
+        {},
+    )
+
+    processing = ui_state.get(
+        "processing",
+        {},
+    )
+
+    ocr = ui_state.get(
+        "ocr",
+        {},
+    )
+
+    ai_ml = ui_state.get(
+        "ai_ml",
+        {},
+    )
+
+    search = ui_state.get(
+        "search",
+        {},
+    )
+
+    security = ui_state.get(
+        "security",
+        {},
+    )
+
+    server_os = (
+        server.get("server_os")
+        or platform.system()
+    )
+
+    defaults = build_default_paths(
+        server_os
+    )
+
     app_root = normalize_path(
-        paths.get("server_root")
-        or default_server_root(server_os)
+        paths.get(
+            "server_root",
+            defaults["app_root"],
+        )
+        or defaults["app_root"]
     )
 
     documents_root = normalize_path(
-        paths.get("documents")
+        paths.get(
+            "documents",
+            Path(app_root) / "documents",
+        )
         or Path(app_root) / "documents"
     )
 
     index_root = normalize_path(
-        paths.get("index")
+        paths.get(
+            "index",
+            Path(app_root) / "search_index",
+        )
         or Path(app_root) / "search_index"
     )
 
     backups_root = normalize_path(
-        paths.get("backups")
+        paths.get(
+            "backups",
+            Path(app_root) / "backups",
+        )
         or Path(app_root) / "backups"
     )
 
     logs_root = normalize_path(
-        paths.get("logs")
+        paths.get(
+            "logs",
+            Path(app_root) / "logs",
+        )
         or Path(app_root) / "logs"
     )
 
     config_root = normalize_path(
-        paths.get("config")
+        paths.get(
+            "config",
+            Path(app_root) / "config",
+        )
         or Path(app_root) / "config"
     )
 
     data_root = normalize_path(
-        paths.get("data")
+        paths.get(
+            "data",
+            Path(app_root) / "data",
+        )
         or Path(app_root) / "data"
     )
 
     runtime_root = normalize_path(
-        paths.get("runtime")
+        paths.get(
+            "runtime",
+            Path(app_root) / "runtime",
+        )
         or Path(app_root) / "runtime"
     )
 
-    selected_labels = gmail.get("selected_labels", [])
+    selected_labels = gmail.get(
+        "selected_labels",
+        [],
+    )
 
-    if not isinstance(selected_labels, list):
-        selected_labels = list(selected_labels or [])
-
-    account_id = gmail.get("account_id") or "gmail_001"
+    if not isinstance(
+        selected_labels,
+        list,
+    ):
+        selected_labels = list(
+            selected_labels or []
+        )
 
     gmail_account = {
-        "account_id": account_id,
-        "email": gmail.get("email", "").strip(),
-        "enabled": bool(gmail.get("enabled", False)),
+        "account_id": (
+            gmail.get("account_id")
+            or "gmail_001"
+        ),
+        "email": gmail.get(
+            "email",
+            "",
+        ).strip(),
+        "enabled": bool(
+            gmail.get(
+                "enabled",
+                False,
+            )
+        ),
         "selected_labels": selected_labels,
         "selected_labels_only": True,
         "download_attachments": bool(
-            gmail.get("download_attachments", True)
+            gmail.get(
+                "download_attachments",
+                True,
+            )
         ),
         "index_message_body": bool(
-            gmail.get("index_message_body", True)
+            gmail.get(
+                "index_message_body",
+                True,
+            )
         ),
         "incremental_sync": bool(
-            gmail.get("incremental_sync", True)
+            gmail.get(
+                "incremental_sync",
+                True,
+            )
         ),
-        "last_successful_sync": gmail.get("last_successful_sync"),
-        "history_id": gmail.get("history_id"),
-        "status": gmail.get("status", "not_connected"),
+        "last_successful_sync": gmail.get(
+            "last_successful_sync"
+        ),
+        "history_id": gmail.get(
+            "history_id"
+        ),
+        "status": gmail.get(
+            "status",
+            "not_connected",
+        ),
     }
 
-    configuration = {
+    return {
         "config_version": CONFIG_VERSION,
         "generated_at": now_iso(),
 
@@ -188,10 +357,19 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
 
         "server": {
             "os": server_os,
-            "name": server.get("server_name", "").strip(),
-            "host": server.get("host", "0.0.0.0").strip(),
+            "name": server.get(
+                "server_name",
+                "",
+            ).strip(),
+            "host": server.get(
+                "host",
+                "0.0.0.0",
+            ).strip(),
             "api_port": int(
-                server.get("api_port", DEFAULT_API_PORT)
+                server.get(
+                    "api_port",
+                    DEFAULT_API_PORT,
+                )
             ),
             "public_hostname": server.get(
                 "public_hostname",
@@ -211,7 +389,10 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
         },
 
         "postgresql": {
-            "host": postgres.get("host", "localhost").strip(),
+            "host": postgres.get(
+                "host",
+                "localhost",
+            ).strip(),
             "port": int(
                 postgres.get(
                     "port",
@@ -226,9 +407,14 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
                 "user",
                 "alcalay",
             ).strip(),
-            "password_env": "ALCALAY_POSTGRES_PASSWORD",
+            "password_env": (
+                "ALCALAY_POSTGRES_PASSWORD"
+            ),
             "connection_tested": bool(
-                postgres.get("connection_tested", False)
+                postgres.get(
+                    "connection_tested",
+                    False,
+                )
             ),
         },
 
@@ -240,7 +426,10 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
 
             "google_drive": {
                 "enabled": bool(
-                    google_drive.get("enabled", False)
+                    google_drive.get(
+                        "enabled",
+                        False,
+                    )
                 ),
                 "root": google_drive.get(
                     "root",
@@ -250,9 +439,11 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
                     "sync_mode",
                     "index_source",
                 ),
-                "oauth_status": google_drive.get(
-                    "oauth_status",
-                    "not_connected",
+                "oauth_status": (
+                    google_drive.get(
+                        "oauth_status",
+                        "not_connected",
+                    )
                 ),
             },
 
@@ -266,44 +457,70 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
                     "deduplicate_by_content_hash": True,
                     "manual_full_sync_explicit_only": True,
                 },
-                "accounts": [gmail_account],
+                "accounts": [
+                    gmail_account
+                ],
             },
         },
 
         "processing": {
             "extract_text": bool(
-                processing.get("extract_text", True)
+                processing.get(
+                    "extract_text",
+                    True,
+                )
             ),
             "extract_metadata": bool(
-                processing.get("extract_metadata", True)
+                processing.get(
+                    "extract_metadata",
+                    True,
+                )
             ),
             "classification": bool(
-                processing.get("classification", True)
+                processing.get(
+                    "classification",
+                    True,
+                )
             ),
             "keywords": bool(
-                processing.get("keywords", True)
+                processing.get(
+                    "keywords",
+                    True,
+                )
             ),
             "thesaurus": bool(
-                processing.get("thesaurus", True)
+                processing.get(
+                    "thesaurus",
+                    True,
+                )
             ),
         },
 
         "ocr": {
             "enabled": bool(
-                ocr.get("enabled", True)
+                ocr.get(
+                    "enabled",
+                    True,
+                )
             ),
             "language": ocr.get(
                 "language",
                 "heb+eng",
             ),
             "automatic": bool(
-                ocr.get("automatic", True)
+                ocr.get(
+                    "automatic",
+                    True,
+                )
             ),
         },
 
         "ai_ml": {
             "enabled": bool(
-                ai_ml.get("enabled", True)
+                ai_ml.get(
+                    "enabled",
+                    True,
+                )
             ),
             "semantic_understanding": bool(
                 ai_ml.get(
@@ -312,7 +529,10 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
                 )
             ),
             "classification": bool(
-                ai_ml.get("classification", True)
+                ai_ml.get(
+                    "classification",
+                    True,
+                )
             ),
             "similar_documents": bool(
                 ai_ml.get(
@@ -324,16 +544,28 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
 
         "search": {
             "full_text": bool(
-                search.get("full_text", True)
+                search.get(
+                    "full_text",
+                    True,
+                )
             ),
             "metadata": bool(
-                search.get("metadata", True)
+                search.get(
+                    "metadata",
+                    True,
+                )
             ),
             "semantic": bool(
-                search.get("semantic", True)
+                search.get(
+                    "semantic",
+                    True,
+                )
             ),
             "boolean": bool(
-                search.get("boolean", True)
+                search.get(
+                    "boolean",
+                    True,
+                )
             ),
             "reindex_changed_documents": bool(
                 search.get(
@@ -356,7 +588,9 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
                     True,
                 )
             ),
-            "api_secret_env": "ALCALAY_API_SECRET",
+            "api_secret_env": (
+                "ALCALAY_API_SECRET"
+            ),
         },
 
         "sync": {
@@ -378,27 +612,25 @@ def build_configuration(ui_state: dict[str, Any]) -> dict[str, Any]:
         },
     }
 
-    return configuration
 
-
-# ---------------------------------------------------------------------------
-# Filesystem operations
-# ---------------------------------------------------------------------------
+# ============================================================================
+# FILESYSTEM
+# ============================================================================
 
 def create_server_directories(
     configuration: dict[str, Any],
 ) -> list[Path]:
     """
-    Create all directories required by the Alcalay server configuration.
-
-    Returns a list of directories that were created/verified.
+    Create/verify all Alcalay server directories.
     """
 
-    paths = configuration.get("paths", {})
-    app_root = Path(paths["app_root"])
+    paths = configuration.get(
+        "paths",
+        {},
+    )
 
     directories = [
-        app_root,
+        Path(paths["app_root"]),
         Path(paths["documents"]),
         Path(paths["search_index"]),
         Path(paths["backups"]),
@@ -411,37 +643,38 @@ def create_server_directories(
     result: list[Path] = []
 
     for directory in directories:
-        result.append(create_directory(directory))
+        result.append(
+            create_directory(directory)
+        )
 
     return result
 
 
-# ---------------------------------------------------------------------------
-# Configuration files
-# ---------------------------------------------------------------------------
+# ============================================================================
+# CONFIG FILES
+# ============================================================================
 
 def write_configuration(
     configuration: dict[str, Any],
 ) -> tuple[Path, Path]:
     """
-    Write the canonical JSON configuration and .env.example.
-
-    Returns:
-        (configuration_path, env_example_path)
+    Write canonical configuration and .env.example.
     """
 
-    paths = configuration.get("paths", {})
+    paths = configuration["paths"]
 
     config_directory = create_directory(
         paths["config"]
     )
 
     configuration_path = (
-        config_directory / CONFIG_FILENAME
+        config_directory
+        / CONFIG_FILENAME
     )
 
     env_example_path = (
-        config_directory / ENV_EXAMPLE_FILENAME
+        config_directory
+        / ENV_EXAMPLE_FILENAME
     )
 
     configuration_path.write_text(
@@ -453,26 +686,28 @@ def write_configuration(
         encoding="utf-8",
     )
 
-    env_content = """# Alcalay environment variables
+    env_example_path.write_text(
+        """# Alcalay environment variables
 # Copy this file to a secure environment configuration.
 # DO NOT commit real secrets to Git.
 
 ALCALAY_POSTGRES_PASSWORD=
 ALCALAY_API_SECRET=
-"""
-
-    env_example_path.write_text(
-        env_content,
+""",
         encoding="utf-8",
     )
 
-    return configuration_path, env_example_path
+    return (
+        configuration_path,
+        env_example_path,
+    )
 
 
 def load_configuration(
     configuration_path: str | Path,
 ) -> dict[str, Any]:
     """Load an existing Alcalay configuration."""
+
     path = Path(configuration_path)
 
     if not path.exists():
@@ -481,32 +716,52 @@ def load_configuration(
         )
 
     return json.loads(
-        path.read_text(encoding="utf-8")
+        path.read_text(
+            encoding="utf-8"
+        )
     )
 
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
+# ============================================================================
+# BASIC VALIDATION
+# ============================================================================
 
 def validate_configuration(
     configuration: dict[str, Any],
 ) -> tuple[bool, list[str]]:
     """
-    Validate the canonical configuration.
+    Validate configuration structure.
 
-    This validates configuration and filesystem state only.
-    It does not pretend that PostgreSQL, Gmail or Google Drive
-    are connected unless they were actually tested.
+    Detailed machine checks are handled by setup_validator.py.
     """
 
     errors: list[str] = []
 
-    application = configuration.get("application", {})
-    server = configuration.get("server", {})
-    paths = configuration.get("paths", {})
-    postgres = configuration.get("postgresql", {})
-    security = configuration.get("security", {})
+    application = configuration.get(
+        "application",
+        {},
+    )
+
+    server = configuration.get(
+        "server",
+        {},
+    )
+
+    paths = configuration.get(
+        "paths",
+        {},
+    )
+
+    postgres = configuration.get(
+        "postgresql",
+        {},
+    )
+
+    security = configuration.get(
+        "security",
+        {},
+    )
+
     gmail = (
         configuration
         .get("sources", {})
@@ -518,8 +773,10 @@ def validate_configuration(
             "Application name is invalid."
         )
 
-    server_name = server.get("name", "").strip()
-    if not server_name:
+    if not server.get(
+        "name",
+        "",
+    ).strip():
         errors.append(
             "Server name is required."
         )
@@ -531,12 +788,8 @@ def validate_configuration(
             "API port is invalid."
         )
 
-    if not paths.get("app_root"):
-        errors.append(
-            "Application root is missing."
-        )
-
     for key in (
+        "app_root",
         "documents",
         "search_index",
         "backups",
@@ -572,17 +825,19 @@ def validate_configuration(
             "PostgreSQL user is missing."
         )
 
-    if security.get("tls_required") is not True:
+    if security.get(
+        "tls_required"
+    ) is not True:
         errors.append(
             "TLS must be required."
         )
 
-    gmail_policy = gmail.get(
+    policy = gmail.get(
         "global_policy",
         {},
     )
 
-    if gmail_policy.get(
+    if policy.get(
         "sync_entire_mailbox"
     ):
         errors.append(
@@ -590,14 +845,14 @@ def validate_configuration(
             "must remain disabled."
         )
 
-    if not gmail_policy.get(
+    if not policy.get(
         "sync_selected_labels_only"
     ):
         errors.append(
             "Gmail selected-label policy is required."
         )
 
-    if not gmail_policy.get(
+    if not policy.get(
         "incremental"
     ):
         errors.append(
@@ -611,31 +866,24 @@ def validate_configuration(
     )
 
 
-# ---------------------------------------------------------------------------
-# Compatibility / terminal entry point
-# ---------------------------------------------------------------------------
+# ============================================================================
+# COMPATIBILITY ENTRY POINT
+# ============================================================================
 
 def main() -> None:
-    """
-    Terminal entry point.
-
-    The graphical UI does not call this function.
-    It exists so the engine can still be used independently
-    from a terminal if required.
-    """
-
     print(f"{APP_NAME} Server Setup")
     print("=" * 60)
     print()
     print(
-        "The graphical setup UI should be used for interactive setup:"
+        "Use the graphical setup UI:"
     )
     print()
-    print("    python init_files/setup_ui.py")
+    print(
+        "    python init_files/setup_ui.py"
+    )
     print()
     print(
-        "The setup engine is exposed through reusable functions "
-        "for the graphical UI."
+        "The setup engine is reusable by the UI."
     )
 
 
