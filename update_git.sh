@@ -1,3 +1,4 @@
+```zsh
 #!/bin/zsh
 
 set -e
@@ -23,7 +24,39 @@ if [ ! -d ".git" ]; then
     exit 1
 fi
 
-echo "[1/7] Activating Python virtual environment..."
+# --------------------------------------------------
+# 2. Verify main branch
+# --------------------------------------------------
+
+CURRENT_BRANCH=$(git branch --show-current)
+
+echo "[1/8] Checking Git branch..."
+echo "Current branch: $CURRENT_BRANCH"
+echo ""
+
+if [ "$CURRENT_BRANCH" != "main" ]; then
+    echo "ERROR: Alcalay project must be updated from the main branch."
+    echo ""
+    echo "Current branch:"
+    echo "  $CURRENT_BRANCH"
+    echo ""
+    echo "Expected:"
+    echo "  main"
+    echo ""
+    echo "Switch to main with:"
+    echo "  git switch main"
+    echo ""
+    exit 1
+fi
+
+echo "Git branch: OK"
+echo ""
+
+# --------------------------------------------------
+# 3. Activate Python virtual environment
+# --------------------------------------------------
+
+echo "[2/8] Activating Python virtual environment..."
 
 if [ ! -f "$VENV/bin/activate" ]; then
     echo "ERROR: Python virtual environment not found:"
@@ -38,23 +71,32 @@ python --version
 echo ""
 
 # --------------------------------------------------
-# 2. Check Python files
+# 4. Check Python files
 # --------------------------------------------------
 
-echo "[2/7] Checking Python files..."
+echo "[3/8] Checking Python files..."
 
-find src -type f -name "*.py" \
+PYTHON_ERROR=0
+
+find src init_files -type f -name "*.py" \
     -not -path "*/__pycache__/*" \
-    -exec python -m py_compile {} \;
+    -exec python -m py_compile {} \; || PYTHON_ERROR=1
+
+if [ "$PYTHON_ERROR" -ne 0 ]; then
+    echo ""
+    echo "ERROR: Python syntax check failed."
+    echo "Git update aborted."
+    exit 1
+fi
 
 echo "Python syntax check: OK"
 echo ""
 
 # --------------------------------------------------
-# 3. Show current status
+# 5. Show current status
 # --------------------------------------------------
 
-echo "[3/7] Current Git status..."
+echo "[4/8] Current Git status..."
 echo ""
 
 git status --short
@@ -62,16 +104,16 @@ git status --short
 echo ""
 
 # --------------------------------------------------
-# 4. Check nested repository / submodule
+# 6. Check nested repository / uri_source
 # --------------------------------------------------
 
-echo "[4/7] Checking nested repositories..."
+echo "[5/8] Checking nested repositories..."
 
 if [ -d "$PROJECT_ROOT/uri_source/.git" ] || [ -f "$PROJECT_ROOT/uri_source/.git" ]; then
 
     echo ""
-    echo "WARNING: uri_source is a separate Git repository/submodule."
-    echo "Its internal changes cannot be committed by the Alcalay repository."
+    echo "WARNING: uri_source is a separate Git repository."
+    echo "Its internal files are NOT part of the Alcalay Git repository."
     echo ""
 
     (
@@ -79,6 +121,7 @@ if [ -d "$PROJECT_ROOT/uri_source/.git" ] || [ -f "$PROJECT_ROOT/uri_source/.git
 
         if [ -n "$(git status --porcelain)" ]; then
             echo "uri_source has uncommitted changes:"
+            echo ""
             git status --short
             echo ""
             echo "These changes will NOT be included in the Alcalay commit."
@@ -94,88 +137,88 @@ fi
 echo ""
 
 # --------------------------------------------------
-# 5. Add ALL changes
+# 7. Add and commit ALL Alcalay changes
 # --------------------------------------------------
 
-echo "[5/7] Adding all changes..."
+echo "[6/8] Adding all Alcalay changes..."
 
 git add -A
 
 echo ""
 echo "Files staged:"
 git diff --cached --name-status
-
 echo ""
 
-# --------------------------------------------------
-# 6. Commit
-# --------------------------------------------------
-
-echo "[6/7] Creating Git commit..."
-
 if git diff --cached --quiet; then
-
-    echo "No new changes to commit."
-
+    echo "No new Alcalay changes to commit."
 else
+    echo "Creating Git commit..."
 
-    COMMIT_MESSAGE="Update Alcalay files"
+    COMMIT_MESSAGE="Update Alcalay project"
 
     git commit -m "$COMMIT_MESSAGE"
 
+    echo ""
+    echo "Commit created:"
+    git log -1 --oneline
 fi
 
 echo ""
 
 # --------------------------------------------------
-# 7. Push
+# 8. Push ONLY main
 # --------------------------------------------------
 
-echo "[7/7] Pushing to GitHub..."
+echo "[7/8] Updating GitHub main..."
 
-CURRENT_BRANCH=$(git branch --show-current)
-
-if [ -z "$CURRENT_BRANCH" ]; then
-    echo "ERROR: Could not determine current Git branch."
-    exit 1
-fi
-
-echo "Current branch: $CURRENT_BRANCH"
-
-if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-
-    UPSTREAM=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}')
-
-    echo "Upstream: $UPSTREAM"
-    echo ""
-
-    git push
-
-else
-
-    echo "No upstream branch configured."
-    echo "Creating upstream for: $CURRENT_BRANCH"
-    echo ""
-
-    git push -u origin "$CURRENT_BRANCH"
-
-fi
+echo "Remote:"
+git remote get-url origin
 
 echo ""
+echo "Pushing:"
+echo "  local  main"
+echo "  remote main"
+echo ""
+
+git push -u origin main
+
+echo ""
+
+# --------------------------------------------------
+# Final verification
+# --------------------------------------------------
+
+echo "[8/8] Final verification..."
+echo ""
+
 echo "=========================================="
-echo " Git update and push completed"
+echo " Git update completed successfully"
 echo "=========================================="
 echo ""
 
-echo "Final Git status:"
-git status --short
-
-echo ""
 echo "Branch:"
 git branch --show-current
 
 echo ""
+
 echo "Latest commit:"
 git log -1 --oneline
 
 echo ""
+
+echo "Git status:"
+git status --short
+
+echo ""
+
+echo "Remote:"
+git remote -v
+
+echo ""
+
+echo "=========================================="
+echo " Alcalay Git is synchronized with GitHub"
+echo "=========================================="
+echo ""
+```
+
