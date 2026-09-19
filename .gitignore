@@ -45,3 +45,8 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
+
+# Google Gmail OAuth credentials
+config/gmail/credentials.json
+config/gmail/token.json
+config/gmail/tokens/
