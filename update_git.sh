@@ -1,4 +1,4 @@
-```zsh
+
 #!/bin/zsh
 
 set -e
@@ -220,5 +220,5 @@ echo "=========================================="
 echo " Alcalay Git is synchronized with GitHub"
 echo "=========================================="
 echo ""
-```
+
 
