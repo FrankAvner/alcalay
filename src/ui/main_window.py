@@ -4,7 +4,14 @@
 Alcalay - Main Window
 ======================
 
-Main application menu.
+Main application window.
+
+The main window is responsible only for:
+    - Main menu
+    - Navigation
+    - Opening application modules
+
+Gmail logic is intentionally NOT handled here.
 
 Location:
     src/ui/main_window.py
@@ -13,7 +20,6 @@ Location:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
@@ -25,14 +31,23 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QStackedWidget,
-    QVBoxLayout,
+    QVBoxLayout, 
     QWidget,
+    QPushButton,
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = PROJECT_ROOT / "src"
+# ----------------------------------------------------------------------
+# Gmail window import
+# ----------------------------------------------------------------------
 
+from gmail.gmail_window import GmailWindow
+    
+
+
+# ----------------------------------------------------------------------
+# Main menu
+# ----------------------------------------------------------------------
 
 MENU_ITEMS = [
     (1, "חיפוש Gmail"),
@@ -48,6 +63,10 @@ MENU_ITEMS = [
 ]
 
 
+# ======================================================================
+# Placeholder page
+# ======================================================================
+
 class PlaceholderPage(QWidget):
     """Temporary page until the actual module is connected."""
 
@@ -60,31 +79,252 @@ class PlaceholderPage(QWidget):
         super().__init__(parent)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(40, 40, 40, 40)
+
+        layout.setContentsMargins(
+            40,
+            40,
+            40,
+            40,
+        )
+
         layout.setSpacing(18)
 
         title_label = QLabel(title)
-        title_label.setObjectName("pageTitle")
+
+        title_label.setObjectName(
+            "pageTitle"
+        )
+
         title_label.setAlignment(
             Qt.AlignmentFlag.AlignRight
             | Qt.AlignmentFlag.AlignVCenter
         )
 
-        layout.addWidget(title_label)
+        layout.addWidget(
+            title_label
+        )
 
         if description:
-            description_label = QLabel(description)
-            description_label.setObjectName("pageDescription")
-            description_label.setWordWrap(True)
+
+            description_label = QLabel(
+                description
+            )
+
+            description_label.setObjectName(
+                "pageDescription"
+            )
+
+            description_label.setWordWrap(
+                True
+            )
+
             description_label.setAlignment(
                 Qt.AlignmentFlag.AlignRight
                 | Qt.AlignmentFlag.AlignTop
             )
 
-            layout.addWidget(description_label)
+            layout.addWidget(
+                description_label
+            )
 
         layout.addStretch()
 
+
+# ======================================================================
+# Gmail launcher page
+# ======================================================================
+
+class GmailLauncherPage(QWidget):
+    """
+    Launcher page for the dedicated Gmail window.
+
+    This page does NOT contain Gmail logic.
+
+    It only opens GmailWindow.
+    """
+
+    def __init__(
+        self,
+        main_window: "MainWindow",
+        parent=None,
+    ):
+        super().__init__(parent)
+
+        self.main_window = main_window
+
+        layout = QVBoxLayout(self)
+
+        layout.setContentsMargins(
+            40,
+            40,
+            40,
+            40,
+        )
+
+        layout.setSpacing(20)
+
+        # --------------------------------------------------------------
+        # Title
+        # --------------------------------------------------------------
+
+        title = QLabel(
+            "1. חיפוש Gmail"
+        )
+
+        title.setObjectName(
+            "pageTitle"
+        )
+
+        title.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        layout.addWidget(
+            title
+        )
+
+        # --------------------------------------------------------------
+        # Description
+        # --------------------------------------------------------------
+
+        description = QLabel(
+            "ניהול Gmail מתבצע בחלון ייעודי ונפרד "
+            "ממסך הבית של Alcalay."
+        )
+
+        description.setObjectName(
+            "pageDescription"
+        )
+
+        description.setWordWrap(
+            True
+        )
+
+        description.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignTop
+        )
+
+        layout.addWidget(
+            description
+        )
+
+        # --------------------------------------------------------------
+        # Information card
+        # --------------------------------------------------------------
+
+        card = QFrame()
+
+        card.setObjectName(
+            "moduleCard"
+        )
+
+        card_layout = QVBoxLayout(
+            card
+        )
+
+        card_layout.setContentsMargins(
+            30,
+            30,
+            30,
+            30,
+        )
+
+        card_layout.setSpacing(
+            16
+        )
+
+        title_label = QLabel(
+            "Gmail"
+        )
+
+        title_label.setObjectName(
+            "moduleCardTitle"
+        )
+
+        title_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+        )
+
+        card_layout.addWidget(
+            title_label
+        )
+
+        info = QLabel(
+            "חלון Gmail הייעודי מנהל את החיבור "
+            "ל-Gmail ואת תגיות הדואר. "
+            "בשלב הבא יתווסף אליו ניהול מספר חשבונות "
+            "ו-Labels מקושרים."
+        )
+
+        info.setObjectName(
+            "moduleCardInfo"
+        )
+
+        info.setWordWrap(
+            True
+        )
+
+        info.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignTop
+        )
+
+        card_layout.addWidget(
+            info
+        )
+
+        # --------------------------------------------------------------
+        # Open Gmail button
+        # --------------------------------------------------------------
+
+        button_layout = QHBoxLayout()
+
+        button_layout.addStretch()
+
+        self.open_gmail_button = QPushButton(
+            "פתח חלון Gmail"
+        )
+
+        self.open_gmail_button.setObjectName(
+            "openModuleButton"
+        )
+
+        self.open_gmail_button.setMinimumHeight(
+            42
+        )
+
+        self.open_gmail_button.clicked.connect(
+            self._open_gmail
+        )
+
+        button_layout.addWidget(
+            self.open_gmail_button
+        )
+
+        card_layout.addLayout(
+            button_layout
+        )
+
+        layout.addWidget(
+            card
+        )
+
+        layout.addStretch()
+
+    # ------------------------------------------------------------------
+    # Open Gmail
+    # ------------------------------------------------------------------
+
+    def _open_gmail(self):
+
+        self.main_window.open_gmail_window()
+
+
+# ======================================================================
+# Main Window
+# ======================================================================
 
 class MainWindow(QMainWindow):
     """Main Alcalay application window."""
@@ -92,33 +332,70 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Alcalay - מערכת מידע")
-        self.setMinimumSize(1100, 700)
+        self.setWindowTitle(
+            "Alcalay - מערכת מידע"
+        )
+
+        self.setMinimumSize(
+            1100,
+            700,
+        )
 
         self.menu_list = None
         self.stack = None
         self.page_title = None
 
+        # --------------------------------------------------------------
+        # Dedicated Gmail window
+        # --------------------------------------------------------------
+
+        self.gmail_window = None
+
         self._build_ui()
         self._apply_style()
         self._select_initial_page()
 
-    def _build_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
+    # ------------------------------------------------------------------
+    # Build UI
+    # ------------------------------------------------------------------
 
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
+    def _build_ui(self):
+
+        central = QWidget()
+
+        self.setCentralWidget(
+            central
+        )
+
+        main_layout = QVBoxLayout(
+            central
+        )
+
+        main_layout.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
+
+        main_layout.setSpacing(
+            0
+        )
 
         # ==============================================================
         # HEADER
         # ==============================================================
 
         header = QFrame()
-        header.setObjectName("header")
 
-        header_layout = QHBoxLayout(header)
+        header.setObjectName(
+            "header"
+        )
+
+        header_layout = QHBoxLayout(
+            header
+        )
+
         header_layout.setContentsMargins(
             25,
             15,
@@ -126,31 +403,57 @@ class MainWindow(QMainWindow):
             15,
         )
 
-        system_title = QLabel("ALCALAY")
-        system_title.setObjectName("systemTitle")
+        system_title = QLabel(
+            "ALCALAY"
+        )
+
+        system_title.setObjectName(
+            "systemTitle"
+        )
 
         system_subtitle = QLabel(
             "מערכת מידע וחיפוש מסמכים"
         )
-        system_subtitle.setObjectName("systemSubtitle")
+
+        system_subtitle.setObjectName(
+            "systemSubtitle"
+        )
 
         title_container = QVBoxLayout()
-        title_container.setSpacing(2)
 
-        title_container.addWidget(system_title)
-        title_container.addWidget(system_subtitle)
+        title_container.setSpacing(
+            2
+        )
 
-        header_layout.addLayout(title_container)
+        title_container.addWidget(
+            system_title
+        )
+
+        title_container.addWidget(
+            system_subtitle
+        )
+
+        header_layout.addLayout(
+            title_container
+        )
+
         header_layout.addStretch()
 
-        self.page_title = QLabel("")
+        self.page_title = QLabel(
+            ""
+        )
+
         self.page_title.setObjectName(
             "currentPageTitle"
         )
 
-        header_layout.addWidget(self.page_title)
+        header_layout.addWidget(
+            self.page_title
+        )
 
-        main_layout.addWidget(header)
+        main_layout.addWidget(
+            header
+        )
 
         # ==============================================================
         # MAIN CONTENT
@@ -158,49 +461,83 @@ class MainWindow(QMainWindow):
 
         content = QWidget()
 
-        content_layout = QHBoxLayout(content)
+        content_layout = QHBoxLayout(
+            content
+        )
+
         content_layout.setContentsMargins(
             0,
             0,
             0,
             0,
         )
-        content_layout.setSpacing(0)
+
+        content_layout.setSpacing(
+            0
+        )
 
         # ==============================================================
         # RIGHT MENU
         # ==============================================================
 
         menu_frame = QFrame()
-        menu_frame.setObjectName("menuFrame")
-        menu_frame.setMinimumWidth(300)
-        menu_frame.setMaximumWidth(340)
 
-        menu_layout = QVBoxLayout(menu_frame)
+        menu_frame.setObjectName(
+            "menuFrame"
+        )
+
+        menu_frame.setMinimumWidth(
+            300
+        )
+
+        menu_frame.setMaximumWidth(
+            340
+        )
+
+        menu_layout = QVBoxLayout(
+            menu_frame
+        )
+
         menu_layout.setContentsMargins(
             15,
             20,
             15,
             20,
         )
-        menu_layout.setSpacing(8)
 
-        menu_title = QLabel("תפריט ראשי")
-        menu_title.setObjectName("menuTitle")
+        menu_layout.setSpacing(
+            8
+        )
+
+        menu_title = QLabel(
+            "תפריט ראשי"
+        )
+
+        menu_title.setObjectName(
+            "menuTitle"
+        )
+
         menu_title.setAlignment(
             Qt.AlignmentFlag.AlignRight
         )
 
-        menu_layout.addWidget(menu_title)
+        menu_layout.addWidget(
+            menu_title
+        )
 
         self.menu_list = QListWidget()
-        self.menu_list.setObjectName("mainMenu")
+
+        self.menu_list.setObjectName(
+            "mainMenu"
+        )
 
         self.menu_list.setLayoutDirection(
             Qt.LayoutDirection.RightToLeft
         )
 
-        self.menu_list.setSpacing(4)
+        self.menu_list.setSpacing(
+            4
+        )
 
         for number, title in MENU_ITEMS:
 
@@ -216,10 +553,15 @@ class MainWindow(QMainWindow):
             )
 
             item.setSizeHint(
-                QSize(270, 48)
+                QSize(
+                    270,
+                    48,
+                )
             )
 
-            self.menu_list.addItem(item)
+            self.menu_list.addItem(
+                item
+            )
 
         self.menu_list.currentRowChanged.connect(
             self._menu_changed
@@ -234,6 +576,7 @@ class MainWindow(QMainWindow):
         # ==============================================================
 
         self.stack = QStackedWidget()
+
         self.stack.setObjectName(
             "contentStack"
         )
@@ -245,7 +588,9 @@ class MainWindow(QMainWindow):
                 title,
             )
 
-            self.stack.addWidget(page)
+            self.stack.addWidget(
+                page
+            )
 
         content_layout.addWidget(
             self.stack,
@@ -269,17 +614,31 @@ class MainWindow(QMainWindow):
             "מוכן"
         )
 
+    # ------------------------------------------------------------------
+    # Create pages
+    # ------------------------------------------------------------------
+
     def _create_page(
         self,
         number: int,
         title: str,
     ) -> QWidget:
 
-        descriptions = {
+        # --------------------------------------------------------------
+        # Gmail
+        # --------------------------------------------------------------
 
-            1:
-                "חיפוש הודעות ומידע "
-                "בחשבון Gmail המחובר.",
+        if number == 1:
+
+            return GmailLauncherPage(
+                self
+            )
+
+        # --------------------------------------------------------------
+        # Other pages
+        # --------------------------------------------------------------
+
+        descriptions = {
 
             2:
                 "חיפוש במסמכים ובקבצים "
@@ -316,7 +675,7 @@ class MainWindow(QMainWindow):
             10:
                 (
                     "רענון והוספת מסמכים מהמייל. "
-                    "המערכת תאפשר בחירת חשבון Gmail "
+                    "המערכת תאפשר בעתיד בחירת חשבון Gmail "
                     "ו-Label/תיקייה ותנהל סנכרון "
                     "incremental לכל שילוב בנפרד."
                 ),
@@ -330,6 +689,52 @@ class MainWindow(QMainWindow):
             ),
         )
 
+    # ------------------------------------------------------------------
+    # Open Gmail window
+    # ------------------------------------------------------------------
+
+    def open_gmail_window(self):
+
+        # Gmail module is not available.
+        if GmailWindow is None:
+
+            self.statusBar().showMessage(
+                "מודול Gmail אינו זמין"
+            )
+
+            return
+
+        # --------------------------------------------------------------
+        # Create window only once.
+        # --------------------------------------------------------------
+
+        if (
+            self.gmail_window is None
+            or not self.gmail_window.isVisible()
+        ):
+
+            self.gmail_window = GmailWindow(
+                self
+            )
+
+        # --------------------------------------------------------------
+        # Show and activate.
+        # --------------------------------------------------------------
+
+        self.gmail_window.show()
+
+        self.gmail_window.raise_()
+
+        self.gmail_window.activateWindow()
+
+        self.statusBar().showMessage(
+            "חלון Gmail נפתח"
+        )
+
+    # ------------------------------------------------------------------
+    # Menu changed
+    # ------------------------------------------------------------------
+
     def _menu_changed(
         self,
         row: int,
@@ -341,7 +746,9 @@ class MainWindow(QMainWindow):
         if self.stack is None:
             return
 
-        item = self.menu_list.item(row)
+        item = self.menu_list.item(
+            row
+        )
 
         if item is None:
             return
@@ -353,6 +760,7 @@ class MainWindow(QMainWindow):
         )
 
         if self.page_title is not None:
+
             self.page_title.setText(
                 title
             )
@@ -361,12 +769,21 @@ class MainWindow(QMainWindow):
             f"נבחר: {title}"
         )
 
+    # ------------------------------------------------------------------
+    # Initial page
+    # ------------------------------------------------------------------
+
     def _select_initial_page(self):
 
         if self.menu_list is not None:
+
             self.menu_list.setCurrentRow(
                 0
             )
+
+    # ------------------------------------------------------------------
+    # Style
+    # ------------------------------------------------------------------
 
     def _apply_style(self):
 
@@ -455,6 +872,36 @@ class MainWindow(QMainWindow):
                 font-size: 16px;
             }
 
+            #moduleCard {
+                background: #ffffff;
+                border: 1px solid #d1d5db;
+                border-radius: 10px;
+            }
+
+            #moduleCardTitle {
+                color: #374151;
+                font-size: 18px;
+                font-weight: bold;
+            }
+
+            #moduleCardInfo {
+                color: #4b5563;
+                font-size: 15px;
+            }
+
+            #openModuleButton {
+                background: #2563eb;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 22px;
+                font-weight: bold;
+            }
+
+            #openModuleButton:hover {
+                background: #1d4ed8;
+            }
+
             QStatusBar {
                 background: #e5e7eb;
                 color: #374151;
@@ -462,6 +909,10 @@ class MainWindow(QMainWindow):
             """
         )
 
+
+# ======================================================================
+# Main
+# ======================================================================
 
 def main():
 
@@ -479,6 +930,7 @@ def main():
     )
 
     window = MainWindow()
+
     window.show()
 
     return app.exec()

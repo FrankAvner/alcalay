@@ -6,18 +6,20 @@ Alcalay - Gmail Connection
 
 Gmail OAuth connection module.
 
-This module is intentionally limited to:
-    - Connecting to a Gmail account
-    - Refreshing an existing OAuth token
+This module is responsible only for:
+    - Connecting to a specific Gmail account
+    - Refreshing an OAuth token
     - Reading the connected Gmail account address
     - Providing the authenticated Gmail API service
 
 It does NOT contain:
     - Gmail search
-    - Gmail labels
+    - Gmail labels management
     - Message downloading
     - Attachments
     - Synchronization
+
+Each Gmail account has its own OAuth token.
 """
 
 from __future__ import annotations
@@ -45,14 +47,18 @@ CURRENT_FILE = Path(__file__).resolve()
 # └── config/
 #     └── gmail/
 #         ├── credentials.json
-#         └── token.json
+#         └── tokens/
+#             ├── frank.avner@gmail.com.json
+#             └── another@gmail.com.json
 #
+
 PROJECT_ROOT = CURRENT_FILE.parents[2]
 
 GMAIL_DIR = PROJECT_ROOT / "config" / "gmail"
 
 CREDENTIALS_FILE = GMAIL_DIR / "credentials.json"
-TOKEN_FILE = GMAIL_DIR / "token.json"
+
+TOKENS_DIR = GMAIL_DIR / "tokens"
 
 
 # ----------------------------------------------------------------------
@@ -64,29 +70,74 @@ SCOPES = [
 ]
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
+# Helper functions
+# ======================================================================
+
+def _normalize_email(email: str) -> str:
+    """
+    Normalize a Gmail address for internal use.
+    """
+
+    return email.strip().lower()
+
+
+def _token_file_for_email(email: str) -> Path:
+    """
+    Return the OAuth token file for a specific Gmail account.
+
+    Example:
+        frank.avner@gmail.com
+        ->
+        config/gmail/tokens/frank.avner@gmail.com.json
+    """
+
+    normalized_email = _normalize_email(email)
+
+    return TOKENS_DIR / f"{normalized_email}.json"
+
+
+# ======================================================================
 # Gmail Connection
-# ----------------------------------------------------------------------
+# ======================================================================
 
 class GmailConnection:
     """
-    Handles authentication and connection to Gmail.
+    Handles authentication and connection to one Gmail account.
 
-    This class intentionally contains only the Gmail connection layer.
+    One GmailConnection instance represents one currently connected
+    Gmail account.
     """
 
-    def __init__(self):
+    def __init__(self, account_email: str = ""):
+
         self.service = None
         self.credentials = None
-        self.account_email = ""
+
+        self.account_email = _normalize_email(
+            account_email
+        )
 
     # ------------------------------------------------------------------
     # Connect
     # ------------------------------------------------------------------
 
-    def connect(self) -> str:
+    def connect(
+        self,
+        account_email: str | None = None,
+    ) -> str:
         """
-        Connect to Gmail.
+        Connect to a specific Gmail account.
+
+        Args:
+            account_email:
+                Optional Gmail address.
+
+                If supplied, it is used as the preferred account
+                during OAuth.
+
+                If omitted and no account was previously supplied,
+                OAuth account selection is used.
 
         Returns:
             The connected Gmail account email address.
@@ -99,7 +150,22 @@ class GmailConnection:
                 If authentication or Gmail connection fails.
         """
 
+        # --------------------------------------------------------------
+        # Update requested account
+        # --------------------------------------------------------------
+
+        if account_email:
+
+            self.account_email = _normalize_email(
+                account_email
+            )
+
+        # --------------------------------------------------------------
+        # Verify credentials.json
+        # --------------------------------------------------------------
+
         if not CREDENTIALS_FILE.exists():
+
             raise FileNotFoundError(
                 "לא נמצא credentials.json:\n\n"
                 f"{CREDENTIALS_FILE}"
@@ -110,27 +176,40 @@ class GmailConnection:
             exist_ok=True
         )
 
+        TOKENS_DIR.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
         credentials = None
 
         # --------------------------------------------------------------
-        # Try existing token
+        # Try existing token for the requested account
         # --------------------------------------------------------------
 
-        if TOKEN_FILE.exists():
+        token_file = None
 
-            try:
+        if self.account_email:
 
-                credentials = (
-                    Credentials
-                    .from_authorized_user_file(
-                        str(TOKEN_FILE),
-                        SCOPES
+            token_file = _token_file_for_email(
+                self.account_email
+            )
+
+            if token_file.exists():
+
+                try:
+
+                    credentials = (
+                        Credentials
+                        .from_authorized_user_file(
+                            str(token_file),
+                            SCOPES
+                        )
                     )
-                )
 
-            except Exception:
+                except Exception:
 
-                credentials = None
+                    credentials = None
 
         # --------------------------------------------------------------
         # Refresh existing credentials
@@ -171,20 +250,6 @@ class GmailConnection:
                 )
             )
 
-            # ----------------------------------------------------------
-            # Save token
-            # ----------------------------------------------------------
-
-            with open(
-                TOKEN_FILE,
-                "w",
-                encoding="utf-8"
-            ) as file:
-
-                file.write(
-                    credentials.to_json()
-                )
-
         # --------------------------------------------------------------
         # Build Gmail API service
         # --------------------------------------------------------------
@@ -199,7 +264,7 @@ class GmailConnection:
         )
 
         # --------------------------------------------------------------
-        # Verify connection and obtain account email
+        # Verify connection and obtain actual account email
         # --------------------------------------------------------------
 
         profile = (
@@ -210,15 +275,48 @@ class GmailConnection:
             .execute()
         )
 
-        self.account_email = profile.get(
+        connected_email = profile.get(
             "emailAddress",
             ""
         )
 
-        if not self.account_email:
+        if not connected_email:
+
+            self.service = None
+            self.credentials = None
+
             raise RuntimeError(
                 "החיבור ל-Gmail הצליח, "
                 "אך לא התקבלה כתובת חשבון."
+            )
+
+        connected_email = _normalize_email(
+            connected_email
+        )
+
+        # --------------------------------------------------------------
+        # If the requested account was different from the actual
+        # connected account, use the actual account.
+        # --------------------------------------------------------------
+
+        self.account_email = connected_email
+
+        # --------------------------------------------------------------
+        # Save token under the actual Gmail account.
+        # --------------------------------------------------------------
+
+        token_file = _token_file_for_email(
+            self.account_email
+        )
+
+        with open(
+            token_file,
+            "w",
+            encoding="utf-8"
+        ) as file:
+
+            file.write(
+                credentials.to_json()
             )
 
         return self.account_email
@@ -259,6 +357,7 @@ class GmailConnection:
         """
 
         if self.service is None:
+
             raise RuntimeError(
                 "אין חיבור פעיל ל-Gmail."
             )
@@ -273,7 +372,7 @@ class GmailConnection:
         """
         Disconnect the current Gmail service from the application.
 
-        This does NOT delete token.json.
+        The OAuth token is intentionally NOT deleted.
         """
 
         self.service = None
@@ -281,9 +380,9 @@ class GmailConnection:
         self.account_email = ""
 
 
-# ----------------------------------------------------------------------
+# ======================================================================
 # Standalone test
-# ----------------------------------------------------------------------
+# ======================================================================
 
 def main() -> int:
 
@@ -298,8 +397,8 @@ def main() -> int:
 
     print()
 
-    print("Token:")
-    print(TOKEN_FILE)
+    print("Tokens directory:")
+    print(TOKENS_DIR)
 
     print()
 
@@ -316,8 +415,17 @@ def main() -> int:
         print("החיבור הצליח")
         print("=" * 60)
         print()
+
         print(f"חשבון Gmail: {email}")
+
         print()
+
+        print(
+            f"Token: {_token_file_for_email(email)}"
+        )
+
+        print()
+
         print("Gmail API service: OK")
         print()
 
@@ -329,6 +437,7 @@ def main() -> int:
         print("החיבור נכשל")
         print("=" * 60)
         print()
+
         print(str(exc))
         print()
 
@@ -336,6 +445,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+
     raise SystemExit(
         main()
     )

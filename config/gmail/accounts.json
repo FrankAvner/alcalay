@@ -1,0 +1,333 @@
+{
+  "version": 1,
+  "accounts": [
+    {
+      "email": "frank.avner@gmail.com",
+      "display_name": "",
+      "enabled": true,
+      "created_at": "2026-09-19T11:45:39.811959+00:00",
+      "updated_at": "2026-09-19T11:48:37.376994+00:00",
+      "labels": [
+        {
+          "id": "Label_117",
+          "name": "..יוכבד",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.327172+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:45:55.730967+00:00",
+          "updated_at": "2026-09-19T11:48:37.327172+00:00"
+        },
+        {
+          "id": "Label_9",
+          "name": ".avner",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.330999+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:45:58.570611+00:00",
+          "updated_at": "2026-09-19T11:48:37.330999+00:00"
+        },
+        {
+          "id": "Label_3396445801430587536",
+          "name": ".Hall street",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.333873+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:45:59.889547+00:00",
+          "updated_at": "2026-09-19T11:48:37.333873+00:00"
+        },
+        {
+          "id": "Label_4204429647721755092",
+          "name": ".רוחי-עזבון",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.336131+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:01.361924+00:00",
+          "updated_at": "2026-09-19T11:48:37.336131+00:00"
+        },
+        {
+          "id": "Label_1554411125997103749",
+          "name": "58 בן יהודה תביעה פרויקט",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.338341+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:03.218666+00:00",
+          "updated_at": "2026-09-19T11:48:37.338341+00:00"
+        },
+        {
+          "id": "Label_104",
+          "name": "a_49 Sacville M1",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.340500+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:04.426506+00:00",
+          "updated_at": "2026-09-19T11:48:37.340500+00:00"
+        },
+        {
+          "id": "Label_7",
+          "name": "ben-yehuda",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.342772+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:05.554240+00:00",
+          "updated_at": "2026-09-19T11:48:37.342772+00:00"
+        },
+        {
+          "id": "Label_51",
+          "name": "ben-yehuda/ben-yehuda-old",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.344866+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:06.434122+00:00",
+          "updated_at": "2026-09-19T11:48:37.344866+00:00"
+        },
+        {
+          "id": "Label_52",
+          "name": "bzalel-14",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.346678+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:07.330541+00:00",
+          "updated_at": "2026-09-19T11:48:37.346678+00:00"
+        },
+        {
+          "id": "Label_6",
+          "name": "bzalel-14/bzlel-14",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.348459+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:08.146207+00:00",
+          "updated_at": "2026-09-19T11:48:37.348459+00:00"
+        },
+        {
+          "id": "Label_11",
+          "name": "cloister",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.350256+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:09.058789+00:00",
+          "updated_at": "2026-09-19T11:48:37.350256+00:00"
+        },
+        {
+          "id": "Label_14",
+          "name": "cloister/14-Lndn-prprty",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.352065+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:10.530852+00:00",
+          "updated_at": "2026-09-19T11:48:37.352065+00:00"
+        },
+        {
+          "id": "Label_21",
+          "name": "cloister/Cloister-102",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.353897+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:11.874300+00:00",
+          "updated_at": "2026-09-19T11:48:37.353897+00:00"
+        },
+        {
+          "id": "Label_10",
+          "name": "lilian-tam-38",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.355531+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:33.337792+00:00",
+          "updated_at": "2026-09-19T11:48:37.355531+00:00"
+        },
+        {
+          "id": "Label_28",
+          "name": "netaim-131/netaim",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.357014+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:48.914104+00:00",
+          "updated_at": "2026-09-19T11:48:37.357014+00:00"
+        },
+        {
+          "id": "Label_8",
+          "name": "netaim-131",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.358556+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:46:55.762136+00:00",
+          "updated_at": "2026-09-19T11:48:37.358556+00:00"
+        },
+        {
+          "id": "Label_96",
+          "name": "Rehovot",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.360128+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:00.882214+00:00",
+          "updated_at": "2026-09-19T11:48:37.360128+00:00"
+        },
+        {
+          "id": "Label_35",
+          "name": "Ramhal-4",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.361720+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:04.641623+00:00",
+          "updated_at": "2026-09-19T11:48:37.361720+00:00"
+        },
+        {
+          "id": "Label_49",
+          "name": "prds_rehovot",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.363661+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:07.665695+00:00",
+          "updated_at": "2026-09-19T11:48:37.363661+00:00"
+        },
+        {
+          "id": "Label_30",
+          "name": "z_b_Ramhal-Lauer",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.365072+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:16.585605+00:00",
+          "updated_at": "2026-09-19T11:48:37.365072+00:00"
+        },
+        {
+          "id": "Label_43",
+          "name": "TLV muni-Rmhl",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.366398+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:26.801859+00:00",
+          "updated_at": "2026-09-19T11:48:37.366398+00:00"
+        },
+        {
+          "id": "Label_34",
+          "name": "z_b_ramhal- shai/Ramhal-Shai",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.367686+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:33.450227+00:00",
+          "updated_at": "2026-09-19T11:48:37.367686+00:00"
+        },
+        {
+          "id": "Label_102",
+          "name": "z_b_ramhal- shai/_borrerut- שיערוך",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.369056+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:37.810778+00:00",
+          "updated_at": "2026-09-19T11:48:37.369056+00:00"
+        },
+        {
+          "id": "Label_101",
+          "name": "z_b_Ramhal-Lauer/_borrerut-banks",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.370469+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:43.482051+00:00",
+          "updated_at": "2026-09-19T11:48:37.370469+00:00"
+        },
+        {
+          "id": "Label_3",
+          "name": "z_b_ramhal- shai",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.371848+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:47.978124+00:00",
+          "updated_at": "2026-09-19T11:48:37.371848+00:00"
+        },
+        {
+          "id": "Label_32",
+          "name": "z_b_Ramhal-Orna",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.373133+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:47:55.161595+00:00",
+          "updated_at": "2026-09-19T11:48:37.373133+00:00"
+        },
+        {
+          "id": "Label_1",
+          "name": "z_b_Ramhal-Lauer/ramhal-Uri",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.374438+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:48:02.393191+00:00",
+          "updated_at": "2026-09-19T11:48:37.374438+00:00"
+        },
+        {
+          "id": "Label_5684316428990878238",
+          "name": "בן יהודה -הוצאות שוטפות",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.375780+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:48:20.354121+00:00",
+          "updated_at": "2026-09-19T11:48:37.375780+00:00"
+        },
+        {
+          "id": "Label_7669363342896459871",
+          "name": "-דוח שנתי 2025",
+          "enabled": true,
+          "last_fetch": "2026-09-19T11:48:37.376994+00:00",
+          "last_local_save": null,
+          "history_id": null,
+          "destination": "local",
+          "created_at": "2026-09-19T11:48:26.762229+00:00",
+          "updated_at": "2026-09-19T11:48:37.376994+00:00"
+        }
+      ]
+    }
+  ]
+}
