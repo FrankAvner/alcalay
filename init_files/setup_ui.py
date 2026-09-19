@@ -1,560 +1,961 @@
 from __future__ import annotations
 
 import json
-import platform
 import sys
+import traceback
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
-    QComboBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-
-# ---------------------------------------------------------------------------
-# Alcalay setup engine imports
-# ---------------------------------------------------------------------------
-
 try:
-    from alcalay_server_setup import (
-        build_configuration,
-        create_server_directories,
-        default_server_root,
-        load_configuration,
-        validate_configuration,
-        write_configuration,
-    )
-except ImportError:
     from .alcalay_server_setup import (
+        APP_NAME,
         build_configuration,
         create_server_directories,
         default_server_root,
-        load_configuration,
         validate_configuration,
-        write_configuration,
     )
-
-
-try:
-    from setup_detector import detect_server
-    from setup_installer import prepare_server
-    from setup_orchestrator import run_full_setup
 except ImportError:
-    from .setup_detector import detect_server
-    from .setup_installer import prepare_server
-    from .setup_orchestrator import run_full_setup
+    INIT_DIR = Path(__file__).resolve().parent
 
+    if str(INIT_DIR) not in sys.path:
+        sys.path.insert(0, str(INIT_DIR))
 
-APP_NAME = "Alcalay"
-SETUP_VERSION = "1.0"
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-INIT_DIR = Path(__file__).resolve().parent
-
-DEFAULT_API_PORT = 8443
-DEFAULT_POSTGRES_PORT = 5432
-
-
-# ===========================================================================
-# Helpers
-# ===========================================================================
-
-def detect_os() -> str:
-    """
-    Return a normalized operating-system name used by Alcalay configuration.
-    """
-
-    system = platform.system()
-
-    if system == "Windows":
-        return "Windows"
-
-    if system == "Darwin":
-        return "macOS"
-
-    if system == "Linux":
-        return "Linux"
-
-    return system
-
-
-def default_server_root_for_os() -> Path:
-    """
-    Return the default Alcalay server root for the current operating system.
-    """
-
-    system = detect_os()
-
-    try:
-        return Path(
-            default_server_root(system)
-        ).expanduser()
-
-    except Exception:
-        if system == "Windows":
-            return Path(r"C:\AlcalayServer")
-
-        return Path.home() / "AlcalayServer"
-
-
-def safe_int(
-    value: Any,
-    default: int,
-) -> int:
-    """
-    Safely convert a value to int.
-    """
-
-    try:
-        return int(value)
-
-    except (TypeError, ValueError):
-        return default
-
-
-def choose_ui_font() -> QFont:
-    """
-    Select a suitable cross-platform UI font.
-
-    IMPORTANT:
-    PySide6 does not expose QApplication.fontDatabase().
-    QFontDatabase must be used directly.
-    """
-
-    preferred = [
-        "Segoe UI",
-        "SF Pro Display",
-        "Helvetica Neue",
-        "Helvetica",
-        "Arial",
-        "Noto Sans",
-        "DejaVu Sans",
-    ]
-
-    try:
-        families = set(
-            QFontDatabase.families()
-        )
-
-    except Exception:
-        families = set()
-
-    for family in preferred:
-        if family in families:
-            font = QFont(
-                family,
-                10,
-            )
-
-            font.setStyleStrategy(
-                QFont.PreferAntialias
-            )
-
-            return font
-
-    return QFont(
-        "Arial",
-        10,
+    from alcalay_server_setup import (
+        APP_NAME,
+        build_configuration,
+        create_server_directories,
+        default_server_root,
+        validate_configuration,
     )
 
 
-def bool_from_value(
+def timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def safe_bool(
     value: Any,
     default: bool = False,
 ) -> bool:
-    """
-    Convert common configuration values to bool.
-    """
+    if value is None:
+        return default
 
-    if isinstance(
-        value,
-        bool,
-    ):
+    if isinstance(value, bool):
         return value
 
-    if isinstance(
-        value,
-        str,
-    ):
-        normalized = value.strip().lower()
-
-        if normalized in {
+    if isinstance(value, str):
+        return value.strip().lower() in {
+            "1",
             "true",
             "yes",
-            "1",
+            "y",
             "on",
-        }:
-            return True
+            "כן",
+        }
 
-        if normalized in {
-            "false",
-            "no",
-            "0",
-            "off",
-        }:
-            return False
-
-    return default
+    return bool(value)
 
 
-def safe_json(
-    value: Any,
-) -> str:
-    """
-    Safely format an object as readable JSON.
-    """
+class ValidationWorker(QObject):
 
-    try:
-        return json.dumps(
-            value,
-            indent=2,
-            ensure_ascii=False,
-            default=str,
-        )
+    progress = Signal(int)
+    stage_started = Signal(int, str)
+    activity = Signal(str)
+    stage_finished = Signal(int, str, bool, str)
 
-    except Exception:
-        return str(value)
-
-
-def find_setup_window(
-    widget: QWidget | None,
-):
-    """
-    Walk up the Qt parent hierarchy until SetupWindow is found.
-
-    This is intentionally implemented without relying on a direct parent
-    because setup pages are hosted inside QScrollArea/QStackedWidget.
-    """
-
-    current = widget
-
-    while current is not None:
-
-        if isinstance(
-            current,
-            SetupWindow,
-        ):
-            return current
-
-        current = current.parentWidget()
-
-    raise RuntimeError(
-        "SetupWindow parent was not found."
-    )
-
-
-def import_database_checker():
-    """
-    Import setup_database in both direct-script and package execution modes.
-    """
-
-    try:
-        from setup_database import check_postgresql
-
-        return check_postgresql
-
-    except ImportError:
-        from .setup_database import check_postgresql
-
-        return check_postgresql
-
-
-# ===========================================================================
-# Base setup step
-# ===========================================================================
-
-class SetupStep(QWidget):
-    """
-    Base class for all Alcalay setup pages.
-    """
+    completed = Signal(object)
+    stopped = Signal()
+    failed = Signal(str)
 
     def __init__(
         self,
-        title: str,
-        description: str = "",
-        parent: QWidget | None = None,
+        configuration: Dict[str, Any],
+        parent: Optional[QObject] = None,
+    ) -> None:
+        super().__init__(parent)
+
+        self.configuration = configuration
+        self._stop_requested = False
+
+    @Slot()
+    def request_stop(self) -> None:
+        self._stop_requested = True
+
+        self.activity.emit(
+            f"{timestamp()}  בקשת עצירה התקבלה."
+        )
+
+    def should_stop(self) -> bool:
+        return self._stop_requested
+
+    def check_structure(self) -> tuple[bool, str]:
+
+        configuration = self.configuration
+
+        if not isinstance(configuration, dict):
+            return (
+                False,
+                "התצורה אינה מסוג dictionary.",
+            )
+
+        required_sections = [
+            "application",
+            "server",
+            "paths",
+            "postgresql",
+            "sources",
+            "processing",
+            "ocr",
+            "ai_ml",
+            "search",
+            "security",
+        ]
+
+        missing = [
+            section
+            for section in required_sections
+            if section not in configuration
+        ]
+
+        if missing:
+            return (
+                False,
+                "חסרים חלקים בתצורה: "
+                + ", ".join(missing),
+            )
+
+        sources = configuration.get(
+            "sources",
+            {},
+        )
+
+        if not isinstance(sources, dict):
+            return (
+                False,
+                "חלק sources אינו תקין.",
+            )
+
+        if "gmail" not in sources:
+            return (
+                False,
+                "חלק sources.gmail חסר.",
+            )
+
+        if "google_drive" not in sources:
+            return (
+                False,
+                "חלק sources.google_drive חסר.",
+            )
+
+        return (
+            True,
+            "מבנה התצורה תקין.",
+        )
+
+    def check_paths(self) -> tuple[bool, str]:
+
+        paths = self.configuration.get(
+            "paths",
+            {},
+        )
+
+        if not isinstance(paths, dict):
+            return (
+                False,
+                "חלק paths אינו תקין.",
+            )
+
+        required_paths = [
+            "app_root",
+            "documents",
+            "search_index",
+            "backups",
+            "logs",
+            "config",
+            "data",
+            "runtime",
+        ]
+
+        missing = [
+            name
+            for name in required_paths
+            if not paths.get(name)
+        ]
+
+        if missing:
+            return (
+                False,
+                "חסרים נתיבים: "
+                + ", ".join(missing),
+            )
+
+        errors = []
+
+        for name in required_paths:
+
+            value = paths.get(name)
+
+            try:
+                path = Path(value).expanduser()
+
+                if path.exists() and not path.is_dir():
+                    errors.append(
+                        f"{name}: אינו תיקייה"
+                    )
+
+            except Exception as exc:
+                errors.append(
+                    f"{name}: {exc}"
+                )
+
+        if errors:
+            return (
+                False,
+                "; ".join(errors),
+            )
+
+        return (
+            True,
+            "כל הנתיבים תקינים.",
+        )
+
+    def check_postgresql(self) -> tuple[bool, str]:
+
+        try:
+
+            setup_database_path = (
+                Path(__file__).resolve().parent
+                / "setup_database.py"
+            )
+
+            if not setup_database_path.exists():
+                return (
+                    False,
+                    "setup_database.py לא נמצא.",
+                )
+
+            import importlib.util
+
+            module_name = "alcalay_setup_database"
+
+            spec = importlib.util.spec_from_file_location(
+                module_name,
+                setup_database_path,
+            )
+
+            if spec is None or spec.loader is None:
+                return (
+                    False,
+                    "לא ניתן לטעון את מודול בדיקת PostgreSQL.",
+                )
+
+            module = importlib.util.module_from_spec(
+                spec
+            )
+
+            # חשוב:
+            # dataclass ב-setup_database.py מסתמך על כך
+            # שהמודול כבר רשום ב-sys.modules בזמן exec_module().
+            sys.modules[module_name] = module
+
+            spec.loader.exec_module(module)
+
+            check_function = getattr(
+                module,
+                "check_postgresql_dict",
+                None,
+            )
+
+            if check_function is None:
+                return (
+                    False,
+                    "check_postgresql_dict אינה זמינה.",
+                )
+
+            result = check_function(
+                self.configuration
+            )
+
+            if not isinstance(result, dict):
+                return (
+                    False,
+                    "בדיקת PostgreSQL החזירה תוצאה שאינה dictionary.",
+                )
+
+            success = bool(
+                result.get(
+                    "success",
+                    False,
+                )
+            )
+
+            message = str(
+                result.get(
+                    "message",
+                    "בדיקת PostgreSQL הסתיימה.",
+                )
+            )
+
+            details = []
+
+            if result.get(
+                "psql_available"
+            ):
+                details.append(
+                    "psql זמין"
+                )
+            else:
+                details.append(
+                    "psql אינו זמין"
+                )
+
+            if result.get(
+                "connection_ok"
+            ):
+                details.append(
+                    "חיבור TCP תקין"
+                )
+            else:
+                details.append(
+                    "חיבור TCP אינו תקין"
+                )
+
+            return (
+                success,
+                f"{message} ({', '.join(details)})",
+            )
+
+        except Exception as exc:
+
+            self.activity.emit(
+                f"{timestamp()}  "
+                "שגיאה פנימית בבדיקת PostgreSQL:"
+            )
+
+            for line in traceback.format_exc().splitlines():
+
+                self.activity.emit(
+                    f"{timestamp()}  {line}"
+                )
+
+            return (
+                False,
+                f"בדיקת PostgreSQL נכשלה: {exc}",
+            )
+
+    def check_google_drive(self) -> tuple[bool, str]:
+
+        sources = self.configuration.get(
+            "sources",
+            {},
+        )
+
+        if not isinstance(sources, dict):
+            return (
+                False,
+                "חלק sources אינו תקין.",
+            )
+
+        drive = sources.get(
+            "google_drive",
+            {},
+        )
+
+        if not isinstance(drive, dict):
+            return (
+                False,
+                "הגדרות Google Drive אינן תקינות.",
+            )
+
+        enabled = safe_bool(
+            drive.get("enabled"),
+            False,
+        )
+
+        if not enabled:
+            return (
+                True,
+                "Google Drive אינו מופעל.",
+            )
+
+        root = (
+            drive.get("local_root")
+            or drive.get("documents_root")
+            or drive.get("root")
+        )
+
+        if not root:
+            return (
+                False,
+                "Google Drive מופעל אך לא הוגדר נתיב מקומי.",
+            )
+
+        try:
+
+            path = Path(root).expanduser()
+
+            path.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            return (
+                True,
+                f"נתיב Google Drive תקין: {path}",
+            )
+
+        except Exception as exc:
+
+            return (
+                False,
+                f"לא ניתן להכין את נתיב Google Drive: {exc}",
+            )
+
+    def check_gmail(self) -> tuple[bool, str]:
+
+        sources = self.configuration.get(
+            "sources",
+            {},
+        )
+
+        if not isinstance(sources, dict):
+            return (
+                False,
+                "חלק sources אינו תקין.",
+            )
+
+        gmail = sources.get(
+            "gmail",
+            {},
+        )
+
+        if not isinstance(gmail, dict):
+            return (
+                False,
+                "הגדרות Gmail אינן תקינות.",
+            )
+
+        accounts = gmail.get(
+            "accounts",
+            [],
+        )
+
+        if not isinstance(accounts, list):
+            return (
+                False,
+                "רשימת חשבונות Gmail אינה תקינה.",
+            )
+
+        if not accounts:
+            return (
+                True,
+                "Gmail מופעל אך עדיין לא חובר חשבון.",
+            )
+
+        enabled_accounts = [
+            account
+            for account in accounts
+            if isinstance(account, dict)
+            and safe_bool(
+                account.get("enabled"),
+                False,
+            )
+        ]
+
+        if not enabled_accounts:
+            return (
+                True,
+                "Gmail מוגדר אך אין חשבון פעיל.",
+            )
+
+        invalid = []
+
+        for account in enabled_accounts:
+
+            email = str(
+                account.get(
+                    "email",
+                    "",
+                )
+            ).strip()
+
+            if not email:
+
+                invalid.append(
+                    str(
+                        account.get(
+                            "account_id",
+                            "חשבון ללא מזהה",
+                        )
+                    )
+                )
+
+        if invalid:
+            return (
+                False,
+                "חשבונות Gmail פעילים ללא כתובת: "
+                + ", ".join(invalid),
+            )
+
+        return (
+            True,
+            f"נמצאו {len(enabled_accounts)} חשבונות Gmail פעילים.",
+        )
+
+    def check_processing(self) -> tuple[bool, str]:
+
+        processing = self.configuration.get(
+            "processing",
+            {},
+        )
+
+        if not isinstance(processing, dict):
+            return (
+                False,
+                "הגדרות עיבוד המסמכים אינן תקינות.",
+            )
+
+        return (
+            True,
+            "הגדרות עיבוד המסמכים תקינות.",
+        )
+
+    def check_ocr(self) -> tuple[bool, str]:
+
+        ocr = self.configuration.get(
+            "ocr",
+            {},
+        )
+
+        if not isinstance(ocr, dict):
+            return (
+                False,
+                "הגדרות OCR אינן תקינות.",
+            )
+
+        enabled = safe_bool(
+            ocr.get("enabled"),
+            False,
+        )
+
+        if not enabled:
+            return (
+                True,
+                "OCR אינו מופעל.",
+            )
+
+        language = str(
+            ocr.get(
+                "language",
+                "",
+            )
+        ).strip()
+
+        if not language:
+            return (
+                False,
+                "OCR מופעל אך לא הוגדרה שפה.",
+            )
+
+        return (
+            True,
+            f"OCR מופעל. שפה: {language}",
+        )
+
+    def check_ai_ml(self) -> tuple[bool, str]:
+
+        ai_ml = self.configuration.get(
+            "ai_ml",
+            {},
+        )
+
+        if not isinstance(ai_ml, dict):
+            return (
+                False,
+                "הגדרות AI / ML אינן תקינות.",
+            )
+
+        enabled = safe_bool(
+            ai_ml.get("enabled"),
+            False,
+        )
+
+        if not enabled:
+            return (
+                True,
+                "AI / ML אינו מופעל.",
+            )
+
+        return (
+            True,
+            "הגדרות AI / ML תקינות.",
+        )
+
+    def check_search(self) -> tuple[bool, str]:
+
+        search = self.configuration.get(
+            "search",
+            {},
+        )
+
+        if not isinstance(search, dict):
+            return (
+                False,
+                "הגדרות החיפוש אינן תקינות.",
+            )
+
+        return (
+            True,
+            "הגדרות מנגנון החיפוש תקינות.",
+        )
+
+    def check_security(self) -> tuple[bool, str]:
+
+        security = self.configuration.get(
+            "security",
+            {},
+        )
+
+        if not isinstance(security, dict):
+            return (
+                False,
+                "הגדרות האבטחה אינן תקינות.",
+            )
+
+        tls_required = safe_bool(
+            security.get(
+                "tls_required",
+                False,
+            ),
+            False,
+        )
+
+        if not tls_required:
+            return (
+                False,
+                "TLS אינו מוגדר כחובה.",
+            )
+
+        return (
+            True,
+            "הגדרות האבטחה תקינות.",
+        )
+
+    def check_full_configuration(self) -> tuple[bool, str]:
+
+        try:
+
+            result = validate_configuration(
+                self.configuration
+            )
+
+            if isinstance(result, tuple):
+
+                if len(result) >= 2:
+
+                    is_valid = bool(
+                        result[0]
+                    )
+
+                    errors = result[1]
+
+                    if is_valid and not errors:
+                        return (
+                            True,
+                            "התצורה תקינה — לא נמצאו שגיאות.",
+                        )
+
+                    if is_valid:
+                        return (
+                            True,
+                            "התצורה תקינה.",
+                        )
+
+                    if isinstance(errors, list):
+
+                        if not errors:
+                            return (
+                                False,
+                                "ולידציה דיווחה על תצורה לא תקינה "
+                                "אך ללא פירוט שגיאות.",
+                            )
+
+                        message = "; ".join(
+                            str(error)
+                            for error in errors
+                        )
+
+                        return (
+                            False,
+                            f"נמצאו שגיאות: {message}",
+                        )
+
+                    return (
+                        False,
+                        str(errors),
+                    )
+
+                if len(result) == 1:
+
+                    return (
+                        bool(result[0]),
+                        "ולידציה מלאה הסתיימה.",
+                    )
+
+            if isinstance(result, list):
+
+                if not result:
+                    return (
+                        True,
+                        "התצורה תקינה — לא נמצאו שגיאות.",
+                    )
+
+                message = "; ".join(
+                    str(error)
+                    for error in result
+                )
+
+                return (
+                    False,
+                    f"נמצאו שגיאות: {message}",
+                )
+
+            if isinstance(result, bool):
+
+                return (
+                    result,
+                    "ולידציה מלאה תקינה."
+                    if result
+                    else "ולידציה מלאה נכשלה.",
+                )
+
+            return (
+                True,
+                "ולידציה מלאה הסתיימה.",
+            )
+
+        except Exception as exc:
+
+            return (
+                False,
+                f"ולידציה מלאה נכשלה: {exc}",
+            )
+
+    @Slot()
+    def run(self) -> None:
+
+        stages = [
+            (
+                "מבנה התצורה",
+                self.check_structure,
+            ),
+            (
+                "בדיקת תיקיות ונתיבים",
+                self.check_paths,
+            ),
+            (
+                "בדיקת PostgreSQL",
+                self.check_postgresql,
+            ),
+            (
+                "בדיקת Google Drive",
+                self.check_google_drive,
+            ),
+            (
+                "בדיקת Gmail",
+                self.check_gmail,
+            ),
+            (
+                "בדיקת עיבוד מסמכים",
+                self.check_processing,
+            ),
+            (
+                "בדיקת OCR",
+                self.check_ocr,
+            ),
+            (
+                "בדיקת AI / ML",
+                self.check_ai_ml,
+            ),
+            (
+                "בדיקת מנגנון החיפוש",
+                self.check_search,
+            ),
+            (
+                "בדיקת אבטחה",
+                self.check_security,
+            ),
+            (
+                "ולידציה מלאה של התצורה",
+                self.check_full_configuration,
+            ),
+        ]
+
+        results = []
+
+        total = len(stages)
+
+        try:
+
+            for index, (
+                name,
+                function,
+            ) in enumerate(
+                stages,
+                start=1,
+            ):
+
+                if self.should_stop():
+
+                    self.activity.emit(
+                        f"{timestamp()}  "
+                        "הבדיקה הופסקה על ידי המשתמש."
+                    )
+
+                    self.stopped.emit()
+                    return
+
+                self.stage_started.emit(
+                    index,
+                    name,
+                )
+
+                self.activity.emit(
+                    f"{timestamp()}  מתחיל: {name}"
+                )
+
+                try:
+
+                    ok, message = function()
+
+                except Exception as exc:
+
+                    ok = False
+
+                    message = (
+                        f"שגיאה: {exc}"
+                    )
+
+                    self.activity.emit(
+                        f"{timestamp()}  "
+                        f"Traceback עבור {name}:"
+                    )
+
+                    for line in traceback.format_exc().splitlines():
+
+                        self.activity.emit(
+                            f"{timestamp()}  {line}"
+                        )
+
+                results.append(
+                    {
+                        "stage": name,
+                        "ok": bool(ok),
+                        "message": str(message),
+                    }
+                )
+
+                self.stage_finished.emit(
+                    index,
+                    name,
+                    bool(ok),
+                    str(message),
+                )
+
+                self.activity.emit(
+                    f"{timestamp()}  "
+                    f"{'OK' if ok else 'FAILED'}: "
+                    f"{name} — {message}"
+                )
+
+                self.progress.emit(
+                    int(
+                        index
+                        * 100
+                        / total
+                    )
+                )
+
+            overall_ok = all(
+                result["ok"]
+                for result in results
+            )
+
+            self.activity.emit(
+                f"{timestamp()}  "
+                "הולידציה הסתיימה: "
+                f"{'תקינה' if overall_ok else 'נמצאו בעיות'}."
+            )
+
+            self.completed.emit(
+                {
+                    "ok": overall_ok,
+                    "results": results,
+                    "configuration": self.configuration,
+                }
+            )
+
+        except Exception as exc:
+
+            error = (
+                f"שגיאה כללית בתהליך הולידציה: {exc}"
+            )
+
+            self.activity.emit(
+                f"{timestamp()}  {error}"
+            )
+
+            self.failed.emit(
+                error
+            )
+
+
+class DirectoriesStep(QWidget):
+
+    def __init__(
+        self,
+        parent=None,
     ):
         super().__init__(parent)
 
-        self.title = title
-        self.description = description
+        layout = QVBoxLayout(self)
 
-        self.main_layout = QVBoxLayout(
-            self
+        title = QLabel(
+            "תיקיות ונתיבים"
         )
 
-        self.main_layout.setContentsMargins(
-            16,
-            16,
-            16,
-            16,
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
 
-        self.main_layout.setSpacing(
-            12
-        )
+        layout.addWidget(title)
 
-        title_label = QLabel(
-            title
-        )
+        form = QFormLayout()
 
-        title_label.setObjectName(
-            "stepTitle"
-        )
-
-        self.main_layout.addWidget(
-            title_label
-        )
-
-        if description:
-
-            description_label = QLabel(
-                description
-            )
-
-            description_label.setWordWrap(
-                True
-            )
-
-            description_label.setObjectName(
-                "stepDescription"
-            )
-
-            self.main_layout.addWidget(
-                description_label
-            )
-
-        self.content_layout = QVBoxLayout()
-
-        self.content_layout.setSpacing(
-            10
-        )
-
-        self.main_layout.addLayout(
-            self.content_layout
-        )
-
-        self.main_layout.addStretch()
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-        return {}
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-        pass
-
-
-# ===========================================================================
-# 1. Server
-# ===========================================================================
-
-class ServerStep(SetupStep):
-
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-    ):
-        super().__init__(
-            "1. Server",
-            "Configure the Alcalay central server.",
-            parent,
-        )
-
-        group = QGroupBox(
-            "Server Configuration"
-        )
-
-        form = QFormLayout(
-            group
-        )
-
-        self.os_combo = QComboBox()
-
-        self.os_combo.addItems(
-            [
-                "Windows",
-                "macOS",
-                "Linux",
-            ]
-        )
-
-        current_os = detect_os()
-
-        if current_os in {
-            "Windows",
-            "macOS",
-            "Linux",
-        }:
-            self.os_combo.setCurrentText(
-                current_os
-            )
-
-        self.server_name = QLineEdit(
-            platform.node()
-            or "AlcalayServer"
-        )
-
-        self.host = QLineEdit(
-            "0.0.0.0"
-        )
-
-        self.api_port = QSpinBox()
-
-        self.api_port.setRange(
-            1,
-            65535,
-        )
-
-        self.api_port.setValue(
-            DEFAULT_API_PORT
-        )
-
-        self.public_hostname = QLineEdit()
-
-        form.addRow(
-            "Operating system:",
-            self.os_combo,
-        )
-
-        form.addRow(
-            "Server name:",
-            self.server_name,
-        )
-
-        form.addRow(
-            "API bind address:",
-            self.host,
-        )
-
-        form.addRow(
-            "API port:",
-            self.api_port,
-        )
-
-        form.addRow(
-            "Public hostname:",
-            self.public_hostname,
-        )
-
-        self.content_layout.addWidget(
-            group
-        )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "os": self.os_combo.currentText(),
-            "name": self.server_name.text().strip(),
-            "host": self.host.text().strip(),
-            "api_port": self.api_port.value(),
-            "public_hostname": (
-                self.public_hostname.text().strip()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.os_combo.setCurrentText(
-            state.get(
-                "os",
-                detect_os(),
-            )
-        )
-
-        self.server_name.setText(
-            state.get(
-                "name",
-                platform.node()
-                or "AlcalayServer",
-            )
-        )
-
-        self.host.setText(
-            state.get(
-                "host",
-                "0.0.0.0",
-            )
-        )
-
-        self.api_port.setValue(
-            safe_int(
-                state.get(
-                    "api_port"
-                ),
-                DEFAULT_API_PORT,
-            )
-        )
-
-        self.public_hostname.setText(
-            state.get(
-                "public_hostname",
-                "",
-            )
-        )
-
-
-# ===========================================================================
-# 2. Directories
-# ===========================================================================
-
-class DirectoriesStep(SetupStep):
-
-    def __init__(
-        self,
-        parent: QWidget | None = None,
-    ):
-        super().__init__(
-            "2. Directories",
-            "Configure the Alcalay server filesystem.",
-            parent,
-        )
-
-        group = QGroupBox(
-            "Filesystem"
-        )
-
-        form = QFormLayout(
-            group
-        )
-
-        self.server_root = QLineEdit(
-            str(
-                default_server_root_for_os()
-            )
-        )
-
+        self.server_root = QLineEdit()
         self.documents = QLineEdit()
         self.search_index = QLineEdit()
         self.backups = QLineEdit()
@@ -562,7 +963,7 @@ class DirectoriesStep(SetupStep):
         self.config = QLineEdit()
 
         form.addRow(
-            "Server root:",
+            "Server Root:",
             self.server_root,
         )
 
@@ -572,7 +973,7 @@ class DirectoriesStep(SetupStep):
         )
 
         form.addRow(
-            "Search index:",
+            "Search Index:",
             self.search_index,
         )
 
@@ -591,256 +992,65 @@ class DirectoriesStep(SetupStep):
             self.config,
         )
 
-        self.content_layout.addWidget(
-            group
-        )
+        layout.addLayout(form)
 
-        buttons = QHBoxLayout()
+        self.load_defaults()
 
-        self.browse_button = QPushButton(
-            "Browse Server Root"
-        )
-
-        self.derive_button = QPushButton(
-            "Derive Paths"
-        )
-
-        self.create_button = QPushButton(
-            "Create / Verify Directories"
-        )
-
-        buttons.addWidget(
-            self.browse_button
-        )
-
-        buttons.addWidget(
-            self.derive_button
-        )
-
-        buttons.addWidget(
-            self.create_button
-        )
-
-        buttons.addStretch()
-
-        self.content_layout.addLayout(
-            buttons
-        )
-
-        self.browse_button.clicked.connect(
-            self.browse_server_root
-        )
-
-        self.derive_button.clicked.connect(
-            self.derive_paths
-        )
-
-        self.create_button.clicked.connect(
-            self.create_directories
-        )
-
-        self.derive_paths()
-
-    def browse_server_root(
-        self,
-    ) -> None:
-
-        selected = QFileDialog.getExistingDirectory(
-            self,
-            "Select Alcalay Server Root",
-            self.server_root.text(),
-        )
-
-        if selected:
-            self.server_root.setText(
-                selected
-            )
-
-            self.derive_paths()
-
-    def derive_paths(
-        self,
-    ) -> None:
-
-        root_text = (
-            self.server_root.text().strip()
-        )
-
-        if not root_text:
-            return
+    def load_defaults(self):
 
         root = Path(
-            root_text
+            default_server_root()
         ).expanduser()
 
+        self.server_root.setText(
+            str(root)
+        )
+
         self.documents.setText(
-            str(
-                root / "documents"
-            )
+            str(root / "documents")
         )
 
         self.search_index.setText(
-            str(
-                root / "search_index"
-            )
+            str(root / "search_index")
         )
 
         self.backups.setText(
-            str(
-                root / "backups"
-            )
+            str(root / "backups")
         )
 
         self.logs.setText(
-            str(
-                root / "logs"
-            )
+            str(root / "logs")
         )
 
         self.config.setText(
-            str(
-                root / "config"
-            )
-        )
-
-    def create_directories(
-        self,
-    ) -> None:
-
-        try:
-            window = find_setup_window(
-                self
-            )
-
-            configuration = (
-                window.build_current_configuration()
-            )
-
-            create_server_directories(
-                configuration
-            )
-
-            QMessageBox.information(
-                self,
-                "Directories",
-                "Server directories were created/verified.",
-            )
-
-        except Exception as exc:
-
-            QMessageBox.critical(
-                self,
-                "Directory Error",
-                str(exc),
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "server_root": (
-                self.server_root.text().strip()
-            ),
-            "documents": (
-                self.documents.text().strip()
-            ),
-            "search_index": (
-                self.search_index.text().strip()
-            ),
-            "backups": (
-                self.backups.text().strip()
-            ),
-            "logs": (
-                self.logs.text().strip()
-            ),
-            "config": (
-                self.config.text().strip()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        root = state.get(
-            "server_root"
-        )
-
-        if root:
-            self.server_root.setText(
-                str(root)
-            )
-
-        self.documents.setText(
-            state.get(
-                "documents",
-                self.documents.text(),
-            )
-        )
-
-        self.search_index.setText(
-            state.get(
-                "search_index",
-                self.search_index.text(),
-            )
-        )
-
-        self.backups.setText(
-            state.get(
-                "backups",
-                self.backups.text(),
-            )
-        )
-
-        self.logs.setText(
-            state.get(
-                "logs",
-                self.logs.text(),
-            )
-        )
-
-        self.config.setText(
-            state.get(
-                "config",
-                self.config.text(),
-            )
+            str(root / "config")
         )
 
 
-# ===========================================================================
-# 3. PostgreSQL
-# ===========================================================================
-
-class PostgreSQLStep(SetupStep):
+class PostgreSQLStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "3. PostgreSQL",
-            (
-                "Configure the PostgreSQL endpoint. "
-                "Database creation and migrations are separate operations."
-            ),
-            parent,
-        )
+        super().__init__(parent)
 
-        group = QGroupBox(
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
             "PostgreSQL"
         )
 
-        form = QFormLayout(
-            group
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
 
+        layout.addWidget(title)
+
+        form = QFormLayout()
+
         self.host = QLineEdit(
-            "localhost"
+            "127.0.0.1"
         )
 
         self.port = QSpinBox()
@@ -851,7 +1061,7 @@ class PostgreSQLStep(SetupStep):
         )
 
         self.port.setValue(
-            DEFAULT_POSTGRES_PORT
+            5432
         )
 
         self.database = QLineEdit(
@@ -893,278 +1103,109 @@ class PostgreSQLStep(SetupStep):
             self.password,
         )
 
-        self.content_layout.addWidget(
-            group
+        layout.addLayout(form)
+
+        note = QLabel(
+            "הסיסמה אינה נשמרת בתצורה. "
+            "בדיקת PostgreSQL משתמשת במנגנון "
+            "ALCALAY_POSTGRES_PASSWORD כאשר הוא מוגדר."
         )
 
-        self.status = QLabel(
-            "Not tested."
+        note.setWordWrap(True)
+
+        layout.addWidget(
+            note
         )
 
-        self.status.setWordWrap(
-            True
-        )
-
-        self.content_layout.addWidget(
-            self.status
-        )
-
-        button = QPushButton(
-            "Test PostgreSQL Endpoint"
-        )
-
-        button.clicked.connect(
-            self.test_connection
-        )
-
-        self.content_layout.addWidget(
-            button
-        )
-
-        info = QLabel(
-            (
-                "The PostgreSQL password is never written "
-                "to the Alcalay JSON configuration."
-            )
-        )
-
-        info.setWordWrap(
-            True
-        )
-
-        self.content_layout.addWidget(
-            info
-        )
-
-    def test_connection(
-        self,
-    ) -> None:
-
-        try:
-            check_postgresql = (
-                import_database_checker()
-            )
-
-            window = find_setup_window(
-                self
-            )
-
-            configuration = (
-                window.build_current_configuration()
-            )
-
-            result = check_postgresql(
-                configuration
-            )
-
-            self.status.setText(
-                result.message
-            )
-
-        except Exception as exc:
-
-            self.status.setText(
-                f"PostgreSQL check failed: {exc}"
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "host": (
-                self.host.text().strip()
-            ),
-            "port": self.port.value(),
-            "database": (
-                self.database.text().strip()
-            ),
-            "user": (
-                self.user.text().strip()
-            ),
-            "password": self.password.text(),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.host.setText(
-            state.get(
-                "host",
-                "localhost",
-            )
-        )
-
-        self.port.setValue(
-            safe_int(
-                state.get(
-                    "port"
-                ),
-                DEFAULT_POSTGRES_PORT,
-            )
-        )
-
-        self.database.setText(
-            state.get(
-                "database",
-                "alcalay",
-            )
-        )
-
-        self.user.setText(
-            state.get(
-                "user",
-                "alcalay",
-            )
-        )
-
-        # Password is intentionally not loaded from JSON.
-        self.password.clear()
+        layout.addStretch()
 
 
-# ===========================================================================
-# 4. Google Drive
-# ===========================================================================
-
-class GoogleDriveStep(SetupStep):
+class GoogleDriveStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "4. Google Drive",
-            "Configure the Google Drive source.",
-            parent,
-        )
+        super().__init__(parent)
 
-        self.enabled = QCheckBox(
-            "Enable Google Drive"
-        )
+        layout = QVBoxLayout(self)
 
-        self.root = QLineEdit()
-
-        self.sync_mode = QComboBox()
-
-        self.sync_mode.addItems(
-            [
-                "Configured root",
-                "Selected folders",
-            ]
-        )
-
-        self.content_layout.addWidget(
-            self.enabled
-        )
-
-        group = QGroupBox(
+        title = QLabel(
             "Google Drive"
         )
 
-        form = QFormLayout(
-            group
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
+
+        layout.addWidget(title)
+
+        self.enabled = QCheckBox(
+            "הפעל Google Drive"
+        )
+
+        layout.addWidget(
+            self.enabled
+        )
+
+        form = QFormLayout()
+
+        self.local_root = QLineEdit()
 
         form.addRow(
-            "Root / address:",
-            self.root,
+            "נתיב מקומי:",
+            self.local_root,
         )
 
-        form.addRow(
-            "Sync mode:",
-            self.sync_mode,
+        layout.addLayout(form)
+
+        note = QLabel(
+            "בשלב זה מוגדר נתיב האחסון המקומי. "
+            "חיבור Google Drive עצמו יתווסף למנגנון הסנכרון."
         )
 
-        self.content_layout.addWidget(
-            group
+        note.setWordWrap(True)
+
+        layout.addWidget(
+            note
         )
 
-        self.status = QLabel(
-            "OAuth connection has not been performed."
-        )
-
-        self.status.setWordWrap(
-            True
-        )
-
-        self.content_layout.addWidget(
-            self.status
-        )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "enabled": (
-                self.enabled.isChecked()
-            ),
-            "root": (
-                self.root.text().strip()
-            ),
-            "sync_mode": (
-                self.sync_mode.currentText()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.enabled.setChecked(
-            bool_from_value(
-                state.get(
-                    "enabled"
-                )
-            )
-        )
-
-        self.root.setText(
-            state.get(
-                "root",
-                "",
-            )
-        )
-
-        self.sync_mode.setCurrentText(
-            state.get(
-                "sync_mode",
-                "Configured root",
-            )
-        )
+        layout.addStretch()
 
 
-# ===========================================================================
-# 5. Gmail
-# ===========================================================================
-
-class GmailStep(SetupStep):
+class GmailStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "5. Gmail",
-            (
-                "Configure incremental Gmail synchronization. "
-                "The entire mailbox is never synchronized automatically."
-            ),
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "Gmail"
         )
 
-        self.enabled = QCheckBox(
-            "Enable Gmail"
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
+
+        layout.addWidget(title)
+
+        self.enabled = QCheckBox(
+            "הפעל Gmail"
+        )
+
+        self.enabled.setChecked(
+            True
+        )
+
+        layout.addWidget(
+            self.enabled
+        )
+
+        form = QFormLayout()
 
         self.account_id = QLineEdit(
             "gmail_001"
@@ -1172,414 +1213,223 @@ class GmailStep(SetupStep):
 
         self.email = QLineEdit()
 
-        self.labels = QLineEdit(
-            "INBOX,IMPORTANT,STARRED,SENT,DRAFT,TRASH"
-        )
-
-        self.selected_only = QCheckBox(
-            "Selected labels only"
-        )
-
-        self.selected_only.setChecked(
-            True
-        )
-
-        self.attachments = QCheckBox(
-            "Download relevant attachments"
-        )
-
-        self.attachments.setChecked(
-            True
-        )
-
-        self.body_indexing = QCheckBox(
-            "Index message body"
-        )
-
-        self.body_indexing.setChecked(
-            True
-        )
-
-        self.incremental = QCheckBox(
-            "Incremental synchronization"
-        )
-
-        self.incremental.setChecked(
-            True
-        )
-
-        self.history_id = QCheckBox(
-            "Use Gmail historyId"
-        )
-
-        self.history_id.setChecked(
-            True
-        )
-
-        group = QGroupBox(
-            "Gmail Account"
-        )
-
-        form = QFormLayout(
-            group
-        )
-
         form.addRow(
             "Account ID:",
             self.account_id,
         )
 
         form.addRow(
-            "Email:",
+            "כתובת Gmail:",
             self.email,
         )
 
-        form.addRow(
-            "Labels:",
-            self.labels,
+        layout.addLayout(form)
+
+        self.download_attachments = QCheckBox(
+            "הורד קבצים מצורפים"
         )
 
-        self.content_layout.addWidget(
-            group
-        )
-
-        self.content_layout.addWidget(
-            self.selected_only
-        )
-
-        self.content_layout.addWidget(
-            self.attachments
-        )
-
-        self.content_layout.addWidget(
-            self.body_indexing
-        )
-
-        self.content_layout.addWidget(
-            self.incremental
-        )
-
-        self.content_layout.addWidget(
-            self.history_id
-        )
-
-        self.status = QLabel(
-            "OAuth connection has not been performed."
-        )
-
-        self.status.setWordWrap(
+        self.download_attachments.setChecked(
             True
         )
 
-        self.content_layout.addWidget(
-            self.status
+        self.index_message_body = QCheckBox(
+            "אינדקס את תוכן ההודעות"
         )
 
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
+        self.index_message_body.setChecked(
+            True
+        )
 
-        labels = [
-            item.strip()
-            for item in (
-                self.labels.text().split(",")
-            )
-            if item.strip()
+        self.incremental_sync = QCheckBox(
+            "סנכרון Incremental"
+        )
+
+        self.incremental_sync.setChecked(
+            True
+        )
+
+        layout.addWidget(
+            self.download_attachments
+        )
+
+        layout.addWidget(
+            self.index_message_body
+        )
+
+        layout.addWidget(
+            self.incremental_sync
+        )
+
+        labels_box = QGroupBox(
+            "Labels לסנכרון"
+        )
+
+        labels_layout = QVBoxLayout(
+            labels_box
+        )
+
+        self.labels = QListWidget()
+
+        default_labels = [
+            "INBOX",
+            "SENT",
+            "STARRED",
+            "IMPORTANT",
         ]
 
-        return {
-            "enabled": (
-                self.enabled.isChecked()
-            ),
-            "account_id": (
-                self.account_id.text().strip()
-            ),
-            "email": (
-                self.email.text().strip()
-            ),
-            "labels": labels,
-            "selected_labels_only": (
-                self.selected_only.isChecked()
-            ),
-            "download_attachments": (
-                self.attachments.isChecked()
-            ),
-            "index_body": (
-                self.body_indexing.isChecked()
-            ),
-            "incremental": (
-                self.incremental.isChecked()
-            ),
-            "history_id": (
-                self.history_id.isChecked()
-            ),
-        }
+        for label in default_labels:
 
-    def apply_state(
+            item = QListWidgetItem(
+                label
+            )
+
+            item.setCheckState(
+                Qt.Checked
+            )
+
+            self.labels.addItem(
+                item
+            )
+
+        labels_layout.addWidget(
+            self.labels
+        )
+
+        layout.addWidget(
+            labels_box
+        )
+
+        layout.addStretch()
+
+    def selected_labels(
         self,
-        state: dict[str, Any],
-    ) -> None:
+    ) -> list[str]:
 
-        if not state:
-            return
+        result = []
 
-        self.enabled.setChecked(
-            bool_from_value(
-                state.get(
-                    "enabled"
-                )
-            )
-        )
-
-        self.account_id.setText(
-            state.get(
-                "account_id",
-                "gmail_001",
-            )
-        )
-
-        self.email.setText(
-            state.get(
-                "email",
-                "",
-            )
-        )
-
-        labels = state.get(
-            "labels",
-            [],
-        )
-
-        if isinstance(
-            labels,
-            list,
+        for index in range(
+            self.labels.count()
         ):
-            self.labels.setText(
-                ",".join(
-                    str(item)
-                    for item in labels
+
+            item = self.labels.item(
+                index
+            )
+
+            if item.checkState() == Qt.Checked:
+
+                result.append(
+                    item.text()
                 )
-            )
 
-        self.selected_only.setChecked(
-            bool_from_value(
-                state.get(
-                    "selected_labels_only",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.attachments.setChecked(
-            bool_from_value(
-                state.get(
-                    "download_attachments",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.body_indexing.setChecked(
-            bool_from_value(
-                state.get(
-                    "index_body",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.incremental.setChecked(
-            bool_from_value(
-                state.get(
-                    "incremental",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.history_id.setChecked(
-            bool_from_value(
-                state.get(
-                    "history_id",
-                    True,
-                ),
-                True,
-            )
-        )
+        return result
 
 
-# ===========================================================================
-# 6. Processing
-# ===========================================================================
-
-class ProcessingStep(SetupStep):
+class ProcessingStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "6. Processing",
-            "Configure document processing.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "עיבוד מסמכים"
         )
 
-        self.text = QCheckBox(
-            "Text extraction"
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
 
-        self.metadata = QCheckBox(
-            "Metadata extraction"
+        layout.addWidget(title)
+
+        self.extract_text = QCheckBox(
+            "חילוץ טקסט"
+        )
+
+        self.extract_text.setChecked(
+            True
+        )
+
+        self.extract_metadata = QCheckBox(
+            "חילוץ Metadata"
+        )
+
+        self.extract_metadata.setChecked(
+            True
         )
 
         self.classification = QCheckBox(
-            "Document classification"
+            "סיווג מסמכים"
+        )
+
+        self.classification.setChecked(
+            True
         )
 
         self.keywords = QCheckBox(
-            "Keywords"
+            "חילוץ מילות מפתח"
+        )
+
+        self.keywords.setChecked(
+            True
         )
 
         self.thesaurus = QCheckBox(
-            "Thesaurus / עיין ערך"
+            "שימוש ב-Thesaurus"
         )
 
-        for checkbox in [
-            self.text,
-            self.metadata,
+        self.thesaurus.setChecked(
+            True
+        )
+
+        for widget in [
+            self.extract_text,
+            self.extract_metadata,
             self.classification,
             self.keywords,
             self.thesaurus,
         ]:
-            checkbox.setChecked(
-                True
+
+            layout.addWidget(
+                widget
             )
 
-            self.content_layout.addWidget(
-                checkbox
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "text_extraction": (
-                self.text.isChecked()
-            ),
-            "metadata_extraction": (
-                self.metadata.isChecked()
-            ),
-            "classification": (
-                self.classification.isChecked()
-            ),
-            "keywords": (
-                self.keywords.isChecked()
-            ),
-            "thesaurus": (
-                self.thesaurus.isChecked()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.text.setChecked(
-            bool_from_value(
-                state.get(
-                    "text_extraction",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.metadata.setChecked(
-            bool_from_value(
-                state.get(
-                    "metadata_extraction",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.classification.setChecked(
-            bool_from_value(
-                state.get(
-                    "classification",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.keywords.setChecked(
-            bool_from_value(
-                state.get(
-                    "keywords",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.thesaurus.setChecked(
-            bool_from_value(
-                state.get(
-                    "thesaurus",
-                    True,
-                ),
-                True,
-            )
-        )
+        layout.addStretch()
 
 
-# ===========================================================================
-# 7. OCR
-# ===========================================================================
-
-class OCRStep(SetupStep):
+class OCRStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "7. OCR",
-            "Configure OCR for scanned/image documents.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "OCR"
         )
 
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
+        )
+
+        layout.addWidget(title)
+
         self.enabled = QCheckBox(
-            "Enable OCR"
+            "הפעל OCR"
         )
 
         self.enabled.setChecked(
-            True
-        )
-
-        self.language = QComboBox()
-
-        self.language.addItems(
-            [
-                "heb+eng",
-                "eng",
-                "heb",
-            ]
+            False
         )
 
         self.automatic = QCheckBox(
-            "Automatic OCR"
+            "OCR אוטומטי"
         )
 
         self.automatic.setChecked(
@@ -1588,508 +1438,266 @@ class OCRStep(SetupStep):
 
         form = QFormLayout()
 
+        self.language = QLineEdit(
+            "heb+eng"
+        )
+
         form.addRow(
-            "Language:",
+            "שפה:",
             self.language,
         )
 
-        self.content_layout.addWidget(
+        layout.addWidget(
             self.enabled
         )
 
-        self.content_layout.addLayout(
-            form
-        )
-
-        self.content_layout.addWidget(
+        layout.addWidget(
             self.automatic
         )
 
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "enabled": (
-                self.enabled.isChecked()
-            ),
-            "language": (
-                self.language.currentText()
-            ),
-            "automatic": (
-                self.automatic.isChecked()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.enabled.setChecked(
-            bool_from_value(
-                state.get(
-                    "enabled",
-                    True,
-                ),
-                True,
-            )
+        layout.addLayout(
+            form
         )
 
-        self.language.setCurrentText(
-            state.get(
-                "language",
-                "heb+eng",
-            )
-        )
-
-        self.automatic.setChecked(
-            bool_from_value(
-                state.get(
-                    "automatic",
-                    True,
-                ),
-                True,
-            )
-        )
+        layout.addStretch()
 
 
-# ===========================================================================
-# 8. AI / ML
-# ===========================================================================
-
-class AIMLStep(SetupStep):
+class AIMLStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "8. AI / ML",
-            "Configure semantic processing and machine learning.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "AI / ML"
         )
+
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
+        )
+
+        layout.addWidget(title)
 
         self.enabled = QCheckBox(
-            "Enable AI / ML"
+            "הפעל AI / ML"
         )
 
-        self.semantic = QCheckBox(
-            "Semantic understanding"
+        self.enabled.setChecked(
+            False
+        )
+
+        self.semantic_understanding = QCheckBox(
+            "Semantic Understanding"
+        )
+
+        self.semantic_understanding.setChecked(
+            True
         )
 
         self.classification = QCheckBox(
-            "AI classification"
-        )
-
-        self.similarity = QCheckBox(
-            "Similar-document analysis"
-        )
-
-        for checkbox in [
-            self.enabled,
-            self.semantic,
-            self.classification,
-            self.similarity,
-        ]:
-            checkbox.setChecked(
-                True
-            )
-
-            self.content_layout.addWidget(
-                checkbox
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "enabled": (
-                self.enabled.isChecked()
-            ),
-            "semantic": (
-                self.semantic.isChecked()
-            ),
-            "classification": (
-                self.classification.isChecked()
-            ),
-            "similarity": (
-                self.similarity.isChecked()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.enabled.setChecked(
-            bool_from_value(
-                state.get(
-                    "enabled",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.semantic.setChecked(
-            bool_from_value(
-                state.get(
-                    "semantic",
-                    True,
-                ),
-                True,
-            )
+            "Classification"
         )
 
         self.classification.setChecked(
-            bool_from_value(
-                state.get(
-                    "classification",
-                    True,
-                ),
-                True,
-            )
+            True
         )
 
-        self.similarity.setChecked(
-            bool_from_value(
-                state.get(
-                    "similarity",
-                    True,
-                ),
-                True,
-            )
+        self.similar_documents = QCheckBox(
+            "Similar Documents"
         )
 
+        self.similar_documents.setChecked(
+            True
+        )
 
-# ===========================================================================
-# 9. Search
-# ===========================================================================
+        for widget in [
+            self.enabled,
+            self.semantic_understanding,
+            self.classification,
+            self.similar_documents,
+        ]:
 
-class SearchStep(SetupStep):
+            layout.addWidget(
+                widget
+            )
+
+        layout.addStretch()
+
+
+class SearchStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "9. Search",
-            "Configure unified search.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "מנגנון חיפוש"
         )
 
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
+        )
+
+        layout.addWidget(title)
+
         self.full_text = QCheckBox(
-            "Full-text search"
+            "Full Text Search"
+        )
+
+        self.full_text.setChecked(
+            True
         )
 
         self.metadata = QCheckBox(
-            "Metadata search"
+            "Metadata Search"
+        )
+
+        self.metadata.setChecked(
+            True
         )
 
         self.semantic = QCheckBox(
-            "Semantic search"
+            "Semantic Search"
+        )
+
+        self.semantic.setChecked(
+            False
         )
 
         self.boolean = QCheckBox(
-            "Boolean search"
+            "Boolean Search"
         )
 
-        self.reindex = QCheckBox(
-            "Reindex changed documents"
+        self.boolean.setChecked(
+            True
         )
 
-        for checkbox in [
+        self.reindex_changed_documents = QCheckBox(
+            "Reindex מסמכים שהשתנו"
+        )
+
+        self.reindex_changed_documents.setChecked(
+            True
+        )
+
+        for widget in [
             self.full_text,
             self.metadata,
             self.semantic,
             self.boolean,
-            self.reindex,
+            self.reindex_changed_documents,
         ]:
-            checkbox.setChecked(
-                True
+
+            layout.addWidget(
+                widget
             )
 
-            self.content_layout.addWidget(
-                checkbox
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "full_text": (
-                self.full_text.isChecked()
-            ),
-            "metadata": (
-                self.metadata.isChecked()
-            ),
-            "semantic": (
-                self.semantic.isChecked()
-            ),
-            "boolean": (
-                self.boolean.isChecked()
-            ),
-            "reindex_changed_documents": (
-                self.reindex.isChecked()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.full_text.setChecked(
-            bool_from_value(
-                state.get(
-                    "full_text",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.metadata.setChecked(
-            bool_from_value(
-                state.get(
-                    "metadata",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.semantic.setChecked(
-            bool_from_value(
-                state.get(
-                    "semantic",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.boolean.setChecked(
-            bool_from_value(
-                state.get(
-                    "boolean",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.reindex.setChecked(
-            bool_from_value(
-                state.get(
-                    "reindex_changed_documents",
-                    True,
-                ),
-                True,
-            )
-        )
+        layout.addStretch()
 
 
-# ===========================================================================
-# 10. Security
-# ===========================================================================
-
-class SecurityStep(SetupStep):
+class SecurityStep(QWidget):
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "10. Security",
-            "Configure authentication and transport security.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "אבטחה"
         )
 
-        self.authentication = QCheckBox(
-            "Authentication required"
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
 
-        self.authentication.setChecked(
+        layout.addWidget(title)
+
+        self.authentication_required = QCheckBox(
+            "Authentication נדרש"
+        )
+
+        self.authentication_required.setChecked(
             True
         )
 
-        self.tls = QCheckBox(
-            "TLS / HTTPS required"
+        self.tls_required = QCheckBox(
+            "TLS נדרש"
         )
 
-        self.tls.setChecked(
+        self.tls_required.setChecked(
             True
         )
 
-        self.secret = QLineEdit()
+        form = QFormLayout()
 
-        self.secret.setEchoMode(
-            QLineEdit.Password
-        )
-
-        group = QGroupBox(
-            "Security Policy"
-        )
-
-        form = QFormLayout(
-            group
+        self.api_secret_env = QLineEdit(
+            "ALCALAY_API_SECRET"
         )
 
         form.addRow(
-            "API secret:",
-            self.secret,
+            "API Secret Environment Variable:",
+            self.api_secret_env,
         )
 
-        self.content_layout.addWidget(
-            self.authentication
+        layout.addWidget(
+            self.authentication_required
         )
 
-        self.content_layout.addWidget(
-            self.tls
+        layout.addWidget(
+            self.tls_required
         )
 
-        self.content_layout.addWidget(
-            group
+        layout.addLayout(
+            form
         )
 
-        self.generate_button = QPushButton(
-            "Generate API Secret"
-        )
-
-        self.generate_button.clicked.connect(
-            self.generate_secret
-        )
-
-        self.content_layout.addWidget(
-            self.generate_button
-        )
-
-        info = QLabel(
-            (
-                "The API secret is not written to the JSON "
-                "configuration file."
-            )
-        )
-
-        info.setWordWrap(
-            True
-        )
-
-        self.content_layout.addWidget(
-            info
-        )
-
-    def generate_secret(
-        self,
-    ) -> None:
-
-        try:
-            try:
-                from setup_auth import (
-                    generate_api_secret
-                )
-
-            except ImportError:
-                from .setup_auth import (
-                    generate_api_secret
-                )
-
-            self.secret.setText(
-                generate_api_secret()
-            )
-
-        except Exception as exc:
-
-            QMessageBox.critical(
-                self,
-                "Security Error",
-                str(exc),
-            )
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        return {
-            "authentication_required": (
-                self.authentication.isChecked()
-            ),
-            "tls_required": (
-                self.tls.isChecked()
-            ),
-            "api_secret_configured": bool(
-                self.secret.text().strip()
-            ),
-        }
-
-    def apply_state(
-        self,
-        state: dict[str, Any],
-    ) -> None:
-
-        if not state:
-            return
-
-        self.authentication.setChecked(
-            bool_from_value(
-                state.get(
-                    "authentication_required",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        self.tls.setChecked(
-            bool_from_value(
-                state.get(
-                    "tls_required",
-                    True,
-                ),
-                True,
-            )
-        )
-
-        # The actual secret is deliberately never loaded.
-        self.secret.clear()
+        layout.addStretch()
 
 
-# ===========================================================================
-# 11. Validation
-# ===========================================================================
+class ValidationStep(QWidget):
 
-class ValidationStep(SetupStep):
+    start_requested = Signal()
+    stop_requested = Signal()
 
     def __init__(
         self,
-        parent: QWidget | None = None,
+        parent=None,
     ):
-        super().__init__(
-            "11. Validation",
-            "Run the complete Alcalay setup checks.",
-            parent,
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        title = QLabel(
+            "Validation — בדיקת המערכת"
         )
 
-        self.status = QLabel(
-            "No validation has been executed."
+        title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
         )
 
-        self.status.setWordWrap(
-            True
+        layout.addWidget(title)
+
+        self.status_label = QLabel(
+            "מוכן לבדיקה."
+        )
+
+        self.status_label.setStyleSheet(
+            "font-weight: bold;"
+        )
+
+        layout.addWidget(
+            self.status_label
         )
 
         self.progress = QProgressBar()
@@ -2103,200 +1711,242 @@ class ValidationStep(SetupStep):
             0
         )
 
-        self.report = QPlainTextEdit()
-
-        self.report.setReadOnly(
-            True
-        )
-
-        self.report.setMinimumHeight(
-            300
-        )
-
-        self.content_layout.addWidget(
-            self.status
-        )
-
-        self.content_layout.addWidget(
+        layout.addWidget(
             self.progress
         )
 
-        self.content_layout.addWidget(
-            self.report
+        current_group = QGroupBox(
+            "שלב נוכחי"
         )
 
-    def set_running(
+        current_layout = QVBoxLayout(
+            current_group
+        )
+
+        self.current_stage = QLabel(
+            "טרם התחיל"
+        )
+
+        self.current_stage.setStyleSheet(
+            "font-weight: bold;"
+        )
+
+        current_layout.addWidget(
+            self.current_stage
+        )
+
+        layout.addWidget(
+            current_group
+        )
+
+        stages_group = QGroupBox(
+            "שלבי Validation"
+        )
+
+        stages_layout = QVBoxLayout(
+            stages_group
+        )
+
+        self.stage_list = QListWidget()
+
+        self.stage_names = [
+            "מבנה התצורה",
+            "בדיקת תיקיות ונתיבים",
+            "בדיקת PostgreSQL",
+            "בדיקת Google Drive",
+            "בדיקת Gmail",
+            "בדיקת עיבוד מסמכים",
+            "בדיקת OCR",
+            "בדיקת AI / ML",
+            "בדיקת מנגנון החיפוש",
+            "בדיקת אבטחה",
+            "ולידציה מלאה של התצורה",
+        ]
+
+        for name in self.stage_names:
+
+            self.stage_list.addItem(
+                QListWidgetItem(
+                    f"○ {name}"
+                )
+            )
+
+        stages_layout.addWidget(
+            self.stage_list
+        )
+
+        layout.addWidget(
+            stages_group
+        )
+
+        activity_group = QGroupBox(
+            "Activity Log"
+        )
+
+        activity_layout = QVBoxLayout(
+            activity_group
+        )
+
+        self.activity_log = QPlainTextEdit()
+
+        self.activity_log.setReadOnly(
+            True
+        )
+
+        activity_layout.addWidget(
+            self.activity_log
+        )
+
+        layout.addWidget(
+            activity_group
+        )
+
+        buttons = QHBoxLayout()
+
+        self.start_button = QPushButton(
+            "התחל Validation"
+        )
+
+        self.stop_button = QPushButton(
+            "עצור"
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        self.clear_button = QPushButton(
+            "נקה Log"
+        )
+
+        buttons.addWidget(
+            self.start_button
+        )
+
+        buttons.addWidget(
+            self.stop_button
+        )
+
+        buttons.addWidget(
+            self.clear_button
+        )
+
+        buttons.addStretch()
+
+        layout.addLayout(
+            buttons
+        )
+
+        self.start_button.clicked.connect(
+            self.start_requested.emit
+        )
+
+        self.stop_button.clicked.connect(
+            self.stop_requested.emit
+        )
+
+        self.clear_button.clicked.connect(
+            self.activity_log.clear
+        )
+
+    def append_activity(
         self,
-    ) -> None:
-
-        self.status.setText(
-            "Running setup checks..."
-        )
-
-        self.progress.setRange(
-            0,
-            0,
-        )
-
-    def set_result(
-        self,
-        success: bool,
         message: str,
-        report: Any,
     ) -> None:
 
-        self.progress.setRange(
-            0,
-            100,
+        self.activity_log.appendPlainText(
+            message
         )
+
+    def reset(self) -> None:
 
         self.progress.setValue(
-            100 if success else 50
+            0
         )
 
-        if success:
-
-            self.status.setText(
-                "Setup checks completed successfully."
-            )
-
-        else:
-
-            self.status.setText(
-                "Setup checks completed with failures."
-            )
-
-        self.report.setPlainText(
-            str(message)
-            + "\n\n"
-            + safe_json(report)
+        self.status_label.setText(
+            "מוכן לבדיקה."
         )
 
+        self.status_label.setStyleSheet(
+            "font-weight: bold;"
+        )
 
-# ===========================================================================
-# Main Setup Window
-# ===========================================================================
+        self.current_stage.setText(
+            "טרם התחיל"
+        )
+
+        self.stage_list.clear()
+
+        for name in self.stage_names:
+
+            self.stage_list.addItem(
+                QListWidgetItem(
+                    f"○ {name}"
+                )
+            )
+
 
 class SetupWindow(QMainWindow):
 
     def __init__(self):
+
         super().__init__()
 
         self.setWindowTitle(
-            f"{APP_NAME} - Server Setup"
+            f"{APP_NAME} — Server Setup"
         )
 
         self.resize(
-            1200,
-            820,
+            1100,
+            800,
         )
 
-        self.setMinimumSize(
-            1000,
-            700,
-        )
+        self.validation_thread: Optional[
+            QThread
+        ] = None
 
-        self.steps: list[SetupStep] = []
+        self.validation_worker: Optional[
+            ValidationWorker
+        ] = None
+
+        self.last_configuration: Optional[
+            Dict[str, Any]
+        ] = None
 
         self.build_ui()
 
-        self.load_existing_config()
-
-    # -----------------------------------------------------------------------
-    # UI
-    # -----------------------------------------------------------------------
-
-    def build_ui(
-        self,
-    ) -> None:
+    def build_ui(self) -> None:
 
         central = QWidget()
+
+        self.setCentralWidget(
+            central
+        )
 
         root_layout = QVBoxLayout(
             central
         )
 
-        root_layout.setContentsMargins(
-            12,
-            12,
-            12,
-            12,
-        )
-
-        # Header
-        header = QHBoxLayout()
-
         title = QLabel(
-            "ALCALAY"
+            f"{APP_NAME} — Server Setup"
         )
 
-        title.setObjectName(
-            "appTitle"
+        title.setStyleSheet(
+            "font-size: 24px; font-weight: bold;"
         )
 
-        subtitle = QLabel(
-            "Central Server Setup"
-        )
-
-        subtitle.setObjectName(
-            "appSubtitle"
-        )
-
-        header.addWidget(
+        root_layout.addWidget(
             title
         )
 
-        header.addWidget(
-            subtitle
-        )
-
-        header.addStretch()
-
-        os_label = QLabel(
-            f"OS: {detect_os()}"
-        )
-
-        header.addWidget(
-            os_label
-        )
-
-        root_layout.addLayout(
-            header
-        )
-
-        # Main area
-        main_layout = QHBoxLayout()
-
-        # Navigation
-        self.navigation = QVBoxLayout()
-
-        self.navigation.setSpacing(
-            4
-        )
-
-        navigation_widget = QWidget()
-
-        navigation_widget.setLayout(
-            self.navigation
-        )
-
-        navigation_widget.setMaximumWidth(
-            240
-        )
-
-        self.nav_buttons: list[QPushButton] = []
-
-        # Stack
         self.stack = QStackedWidget()
-
-        # Setup pages
-        self.server_step = ServerStep()
 
         self.directories_step = DirectoriesStep()
 
-        self.postgres_step = PostgreSQLStep()
+        self.postgresql_step = PostgreSQLStep()
 
-        self.drive_step = GoogleDriveStep()
+        self.google_drive_step = GoogleDriveStep()
 
         self.gmail_step = GmailStep()
 
@@ -2304,7 +1954,7 @@ class SetupWindow(QMainWindow):
 
         self.ocr_step = OCRStep()
 
-        self.ai_step = AIMLStep()
+        self.ai_ml_step = AIMLStep()
 
         self.search_step = SearchStep()
 
@@ -2312,505 +1962,311 @@ class SetupWindow(QMainWindow):
 
         self.validation_step = ValidationStep()
 
-        self.steps = [
-            self.server_step,
+        self.pages = [
             self.directories_step,
-            self.postgres_step,
-            self.drive_step,
+            self.postgresql_step,
+            self.google_drive_step,
             self.gmail_step,
             self.processing_step,
             self.ocr_step,
-            self.ai_step,
+            self.ai_ml_step,
             self.search_step,
             self.security_step,
             self.validation_step,
         ]
 
-        for index, step in enumerate(
-            self.steps
-        ):
-
-            scroll = QScrollArea()
-
-            scroll.setWidgetResizable(
-                True
-            )
-
-            scroll.setWidget(
-                step
-            )
+        for page in self.pages:
 
             self.stack.addWidget(
-                scroll
+                page
             )
 
-            button = QPushButton(
-                (
-                    f"{index + 1}. "
-                    f"{step.title.split('.', 1)[-1].strip()}"
-                )
-            )
-
-            button.setCheckable(
-                True
-            )
-
-            button.clicked.connect(
-                lambda checked=False,
-                i=index: self.show_step(i)
-            )
-
-            self.nav_buttons.append(
-                button
-            )
-
-            self.navigation.addWidget(
-                button
-            )
-
-        self.navigation.addStretch()
-
-        main_layout.addWidget(
-            navigation_widget
+        root_layout.addWidget(
+            self.stack
         )
 
-        main_layout.addWidget(
-            self.stack,
-            1,
+        navigation = QHBoxLayout()
+
+        self.previous_button = QPushButton(
+            "← הקודם"
         )
 
-        root_layout.addLayout(
-            main_layout,
-            1,
-        )
-
-        # Actions
-        actions_group = QGroupBox(
-            "Setup Actions"
-        )
-
-        actions = QHBoxLayout(
-            actions_group
-        )
-
-        self.detect_button = QPushButton(
-            "Auto Detect"
-        )
-
-        self.validate_button = QPushButton(
-            "Validate"
-        )
-
-        self.prepare_button = QPushButton(
-            "Prepare Server"
-        )
-
-        self.full_setup_button = QPushButton(
-            "Run Full Setup"
+        self.next_button = QPushButton(
+            "הבא →"
         )
 
         self.save_button = QPushButton(
-            "Save Configuration"
+            "שמור תצורה"
         )
 
-        self.finish_button = QPushButton(
-            "Finish"
+        self.validate_button = QPushButton(
+            "Validation"
         )
 
-        actions.addWidget(
-            self.detect_button
+        navigation.addWidget(
+            self.previous_button
         )
 
-        actions.addWidget(
-            self.validate_button
+        navigation.addWidget(
+            self.next_button
         )
 
-        actions.addWidget(
-            self.prepare_button
-        )
+        navigation.addStretch()
 
-        actions.addWidget(
-            self.full_setup_button
-        )
-
-        actions.addWidget(
+        navigation.addWidget(
             self.save_button
         )
 
-        actions.addWidget(
-            self.finish_button
+        navigation.addWidget(
+            self.validate_button
         )
 
-        root_layout.addWidget(
-            actions_group
+        root_layout.addLayout(
+            navigation
         )
 
-        self.setCentralWidget(
-            central
+        self.previous_button.clicked.connect(
+            self.previous_page
         )
 
-        # Signals
-        self.detect_button.clicked.connect(
-            self.auto_detect
-        )
-
-        self.validate_button.clicked.connect(
-            self.validate_current
-        )
-
-        self.prepare_button.clicked.connect(
-            self.prepare_current
-        )
-
-        self.full_setup_button.clicked.connect(
-            self.full_setup
+        self.next_button.clicked.connect(
+            self.next_page
         )
 
         self.save_button.clicked.connect(
             self.save_configuration
         )
 
-        self.finish_button.clicked.connect(
-            self.finish_setup
+        self.validate_button.clicked.connect(
+            self.go_to_validation
         )
 
-        self.show_step(
-            0
+        self.validation_step.start_requested.connect(
+            self.start_validation
         )
 
-    # -----------------------------------------------------------------------
-    # Navigation
-    # -----------------------------------------------------------------------
-
-    def show_step(
-        self,
-        index: int,
-    ) -> None:
-
-        if not self.steps:
-            return
-
-        if index < 0:
-            index = 0
-
-        if index >= len(
-            self.steps
-        ):
-            index = len(
-                self.steps
-            ) - 1
-
-        self.stack.setCurrentIndex(
-            index
+        self.validation_step.stop_requested.connect(
+            self.stop_validation
         )
 
-        for i, button in enumerate(
-            self.nav_buttons
-        ):
-
-            button.setChecked(
-                i == index
-            )
-
-    # -----------------------------------------------------------------------
-    # Configuration state
-    # -----------------------------------------------------------------------
-
-    def collect_state(
-        self,
-    ) -> dict[str, Any]:
-
-        state: dict[str, Any] = {}
-
-        server = (
-            self.server_step.collect_state()
+        self.stack.currentChanged.connect(
+            self.update_navigation
         )
 
-        directories = (
-            self.directories_step.collect_state()
-        )
-
-        postgres = (
-            self.postgres_step.collect_state()
-        )
-
-        drive = (
-            self.drive_step.collect_state()
-        )
-
-        gmail = (
-            self.gmail_step.collect_state()
-        )
-
-        processing = (
-            self.processing_step.collect_state()
-        )
-
-        ocr = (
-            self.ocr_step.collect_state()
-        )
-
-        ai_ml = (
-            self.ai_step.collect_state()
-        )
-
-        search = (
-            self.search_step.collect_state()
-        )
-
-        security = (
-            self.security_step.collect_state()
-        )
-
-        state.update(
-            server
-        )
-
-        state["server_root"] = (
-            directories.get(
-                "server_root",
-                "",
-            )
-        )
-
-        state["paths"] = directories
-
-        state["postgresql"] = postgres
-
-        state["google_drive"] = drive
-
-        state["gmail"] = gmail
-
-        state["processing"] = processing
-
-        state["ocr"] = ocr
-
-        state["ai_ml"] = ai_ml
-
-        state["search"] = search
-
-        state["security"] = security
-
-        # Global synchronization policy.
-        state["sync"] = {
-            "incremental": True,
-            "deduplication": True,
-            "changed_documents_only": True,
-            "manual_full_sync_only": True,
-            "timestamp_tracking": True,
-        }
-
-        # Git policy.
-        state["git_policy"] = {
-            "store_source_code": True,
-            "store_configuration_templates": True,
-            "store_schema": True,
-            "exclude_runtime_data": True,
-            "exclude_documents": True,
-            "exclude_credentials": True,
-            "exclude_tokens": True,
-            "exclude_indexes": True,
-            "exclude_models": True,
-        }
-
-        return state
+        self.update_navigation()
 
     def build_current_configuration(
         self,
-    ) -> dict[str, Any]:
+    ) -> Dict[str, Any]:
 
-        state = self.collect_state()
-
-        return build_configuration(
-            state
-        )
-
-    # -----------------------------------------------------------------------
-    # Existing configuration
-    # -----------------------------------------------------------------------
-
-    def configuration_path(
-        self,
-    ) -> Path:
-
-        root_text = (
+        server_root = Path(
             self.directories_step.server_root.text()
-            .strip()
-        )
-
-        root = Path(
-            root_text
         ).expanduser()
 
-        return (
-            root
-            / "config"
-            / "alcalay_config.json"
+        paths = {
+            "app_root": str(server_root),
+            "documents": self.directories_step.documents.text().strip(),
+            "search_index": self.directories_step.search_index.text().strip(),
+            "backups": self.directories_step.backups.text().strip(),
+            "logs": self.directories_step.logs.text().strip(),
+            "config": self.directories_step.config.text().strip(),
+            "data": str(server_root / "data"),
+            "runtime": str(server_root / "runtime"),
+        }
+
+        gmail_email = (
+            self.gmail_step.email.text().strip()
         )
 
-    def load_existing_config(
-        self,
-    ) -> None:
+        gmail_account = {
+            "account_id": (
+                self.gmail_step.account_id.text().strip()
+                or "gmail_001"
+            ),
+            "email": gmail_email,
+            "enabled": (
+                self.gmail_step.enabled.isChecked()
+                and bool(gmail_email)
+            ),
+            "selected_labels": (
+                self.gmail_step.selected_labels()
+            ),
+            "selected_labels_only": True,
+            "download_attachments": (
+                self.gmail_step.download_attachments.isChecked()
+            ),
+            "index_message_body": (
+                self.gmail_step.index_message_body.isChecked()
+            ),
+            "incremental_sync": (
+                self.gmail_step.incremental_sync.isChecked()
+            ),
+            "status": (
+                "not_connected"
+                if not gmail_email
+                else "configured"
+            ),
+        }
 
-        path = self.configuration_path()
+        ui_state = {
 
-        if not path.exists():
-            return
+            "server": {
+                "server_os": sys.platform,
+                "server_name": "Alcalay Local Server",
+                "api_port": 8443,
+            },
 
-        try:
+            "paths": paths,
 
-            configuration = load_configuration(
-                path
-            )
-
-            self.apply_configuration(
-                configuration
-            )
-
-        except Exception as exc:
-
-            QMessageBox.warning(
-                self,
-                "Configuration",
-                (
-                    "Existing configuration could not "
-                    f"be loaded:\n{exc}"
+            "postgresql": {
+                "host": (
+                    self.postgresql_step.host.text().strip()
                 ),
-            )
+                "port": (
+                    self.postgresql_step.port.value()
+                ),
+                "database": (
+                    self.postgresql_step.database.text().strip()
+                ),
+                "user": (
+                    self.postgresql_step.user.text().strip()
+                ),
+            },
 
-    def apply_configuration(
+            "google_drive": {
+                "enabled": (
+                    self.google_drive_step.enabled.isChecked()
+                ),
+                "local_root": (
+                    self.google_drive_step.local_root.text().strip()
+                ),
+            },
+
+            "gmail": {
+                "account_id": gmail_account[
+                    "account_id"
+                ],
+                "email": gmail_account[
+                    "email"
+                ],
+                "enabled": gmail_account[
+                    "enabled"
+                ],
+                "selected_labels": gmail_account[
+                    "selected_labels"
+                ],
+                "download_attachments": gmail_account[
+                    "download_attachments"
+                ],
+                "index_message_body": gmail_account[
+                    "index_message_body"
+                ],
+                "incremental_sync": gmail_account[
+                    "incremental_sync"
+                ],
+                "status": gmail_account[
+                    "status"
+                ],
+            },
+
+            "processing": {
+                "extract_text": (
+                    self.processing_step.extract_text.isChecked()
+                ),
+                "extract_metadata": (
+                    self.processing_step.extract_metadata.isChecked()
+                ),
+                "classification": (
+                    self.processing_step.classification.isChecked()
+                ),
+                "keywords": (
+                    self.processing_step.keywords.isChecked()
+                ),
+                "thesaurus": (
+                    self.processing_step.thesaurus.isChecked()
+                ),
+            },
+
+            "ocr": {
+                "enabled": (
+                    self.ocr_step.enabled.isChecked()
+                ),
+                "language": (
+                    self.ocr_step.language.text().strip()
+                ),
+                "automatic": (
+                    self.ocr_step.automatic.isChecked()
+                ),
+            },
+
+            "ai_ml": {
+                "enabled": (
+                    self.ai_ml_step.enabled.isChecked()
+                ),
+                "semantic_understanding": (
+                    self.ai_ml_step.semantic_understanding.isChecked()
+                ),
+                "classification": (
+                    self.ai_ml_step.classification.isChecked()
+                ),
+                "similar_documents": (
+                    self.ai_ml_step.similar_documents.isChecked()
+                ),
+            },
+
+            "search": {
+                "full_text": (
+                    self.search_step.full_text.isChecked()
+                ),
+                "metadata": (
+                    self.search_step.metadata.isChecked()
+                ),
+                "semantic": (
+                    self.search_step.semantic.isChecked()
+                ),
+                "boolean": (
+                    self.search_step.boolean.isChecked()
+                ),
+                "reindex_changed_documents": (
+                    self.search_step.reindex_changed_documents.isChecked()
+                ),
+            },
+
+            "security": {
+                "authentication_required": (
+                    self.security_step.authentication_required.isChecked()
+                ),
+                "tls_required": (
+                    self.security_step.tls_required.isChecked()
+                ),
+                "api_secret_env": (
+                    self.security_step.api_secret_env.text().strip()
+                ),
+            },
+        }
+
+        return build_configuration(
+            ui_state
+        )
+
+    def save_configuration(
         self,
-        configuration: dict[str, Any],
-    ) -> None:
-
-        server = configuration.get(
-            "server",
-            {},
-        )
-
-        paths = configuration.get(
-            "paths",
-            {},
-        )
-
-        postgres = configuration.get(
-            "postgresql",
-            {},
-        )
-
-        sources = configuration.get(
-            "sources",
-            {},
-        )
-
-        google_drive = sources.get(
-            "google_drive",
-            {},
-        )
-
-        gmail_root = sources.get(
-            "gmail",
-            {},
-        )
-
-        gmail_accounts = gmail_root.get(
-            "accounts",
-            [],
-        )
-
-        gmail = (
-            gmail_accounts[0]
-            if gmail_accounts
-            else {}
-        )
-
-        processing = configuration.get(
-            "processing",
-            {},
-        )
-
-        ocr = configuration.get(
-            "ocr",
-            {},
-        )
-
-        ai_ml = configuration.get(
-            "ai_ml",
-            {},
-        )
-
-        search = configuration.get(
-            "search",
-            {},
-        )
-
-        security = configuration.get(
-            "security",
-            {},
-        )
-
-        self.server_step.apply_state(
-            server
-        )
-
-        self.directories_step.apply_state(
-            paths
-        )
-
-        self.postgres_step.apply_state(
-            postgres
-        )
-
-        self.drive_step.apply_state(
-            google_drive
-        )
-
-        self.gmail_step.apply_state(
-            gmail
-        )
-
-        self.processing_step.apply_state(
-            processing
-        )
-
-        self.ocr_step.apply_state(
-            ocr
-        )
-
-        self.ai_step.apply_state(
-            ai_ml
-        )
-
-        self.search_step.apply_state(
-            search
-        )
-
-        self.security_step.apply_state(
-            security
-        )
-
-    # -----------------------------------------------------------------------
-    # Auto detection
-    # -----------------------------------------------------------------------
-
-    def auto_detect(
-        self,
-    ) -> None:
+        show_message: bool = True,
+        configuration: Optional[
+            Dict[str, Any]
+        ] = None,
+    ) -> bool:
 
         try:
 
-            configuration = (
-                self.build_current_configuration()
-            )
+            if configuration is None:
 
-            server = configuration.get(
-                "server",
-                {},
-            )
+                configuration = (
+                    self.build_current_configuration()
+                )
 
-            postgres = configuration.get(
-                "postgresql",
-                {},
+            create_server_directories(
+                configuration
             )
 
             paths = configuration.get(
@@ -2818,667 +2274,617 @@ class SetupWindow(QMainWindow):
                 {},
             )
 
-            result = detect_server(
-                server_os=server.get(
-                    "os",
-                    detect_os(),
-                ),
-                server_root=paths.get(
-                    "server_root",
-                    str(
-                        default_server_root_for_os()
-                    ),
-                ),
-                api_port=safe_int(
-                    server.get(
-                        "api_port"
-                    ),
-                    DEFAULT_API_PORT,
-                ),
-                postgres_host=postgres.get(
-                    "host",
-                    "localhost",
-                ),
-                postgres_port=safe_int(
-                    postgres.get(
-                        "port"
-                    ),
-                    DEFAULT_POSTGRES_PORT,
-                ),
+            config_dir_value = paths.get(
+                "config"
             )
 
-            detection = result.to_dict()
+            if not config_dir_value:
 
-            self.apply_detection(
-                detection
-            )
-
-            self.show_detection_result(
-                detection
-            )
-
-        except Exception as exc:
-
-            QMessageBox.critical(
-                self,
-                "Auto Detect",
-                (
-                    "Automatic detection failed:\n"
-                    f"{exc}"
-                ),
-            )
-
-    def apply_detection(
-        self,
-        detection: dict[str, Any],
-    ) -> None:
-
-        os_name = detection.get(
-            "operating_system",
-            detect_os(),
-        )
-
-        self.server_step.os_combo.setCurrentText(
-            os_name
-        )
-
-        self.server_step.server_name.setText(
-            detection.get(
-                "machine_name",
-                platform.node()
-                or "AlcalayServer",
-            )
-        )
-
-        root = detection.get(
-            "server_root"
-        )
-
-        if root:
-
-            self.directories_step.server_root.setText(
-                str(root)
-            )
-
-            self.directories_step.derive_paths()
-
-        api_port = detection.get(
-            "api_port"
-        )
-
-        if api_port is not None:
-
-            self.server_step.api_port.setValue(
-                safe_int(
-                    api_port,
-                    DEFAULT_API_PORT,
+                config_dir_value = (
+                    self.directories_step.config.text().strip()
                 )
+
+            config_dir = Path(
+                config_dir_value
+            ).expanduser()
+
+            config_dir.mkdir(
+                parents=True,
+                exist_ok=True,
             )
 
-        postgres_host = detection.get(
-            "postgres_host"
-        )
-
-        if postgres_host:
-
-            self.postgres_step.host.setText(
-                str(postgres_host)
+            config_path = (
+                config_dir
+                / "alcalay_config.json"
             )
 
-        postgres_port = detection.get(
-            "postgres_port"
-        )
-
-        if postgres_port is not None:
-
-            self.postgres_step.port.setValue(
-                safe_int(
-                    postgres_port,
-                    DEFAULT_POSTGRES_PORT,
-                )
+            temp_path = (
+                config_dir
+                / "alcalay_config.json.tmp"
             )
 
-    def show_detection_result(
-        self,
-        detection: dict[str, Any],
-    ) -> None:
-
-        text = (
-            "Alcalay automatic detection\n"
-            "===========================\n\n"
-        )
-
-        text += safe_json(
-            detection
-        )
-
-        QMessageBox.information(
-            self,
-            "Auto Detect",
-            text,
-        )
-
-    # -----------------------------------------------------------------------
-    # Validation
-    # -----------------------------------------------------------------------
-
-    def validate_current(
-        self,
-    ) -> bool:
-
-        try:
-
-            configuration = (
-                self.build_current_configuration()
+            temp_path.write_text(
+                json.dumps(
+                    configuration,
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
             )
 
-            result = validate_configuration(
+            temp_path.replace(
+                config_path
+            )
+
+            self.last_configuration = (
                 configuration
             )
 
-            success, message = (
-                self.interpret_validation_result(
-                    result
-                )
+            self.validation_step.append_activity(
+                f"{timestamp()}  "
+                f"התצורה נשמרה: {config_path}"
             )
 
-            self.validation_step.set_result(
-                success,
-                message,
-                result,
-            )
-
-            self.show_step(
-                10
-            )
-
-            return success
-
-        except Exception as exc:
-
-            self.validation_step.set_result(
-                False,
-                str(exc),
-                {},
-            )
-
-            self.show_step(
-                10
-            )
-
-            return False
-
-    def interpret_validation_result(
-        self,
-        result: Any,
-    ) -> tuple[bool, str]:
-
-        if isinstance(
-            result,
-            bool,
-        ):
-
-            return (
-                result,
-                (
-                    "Configuration validation passed."
-                    if result
-                    else
-                    "Configuration validation failed."
-                ),
-            )
-
-        if isinstance(
-            result,
-            dict,
-        ):
-
-            success = result.get(
-                "success"
-            )
-
-            if success is None:
-                success = result.get(
-                    "valid"
-                )
-
-            if success is None:
-                success = result.get(
-                    "ok"
-                )
-
-            if success is None:
-                # Some validators return a result dictionary
-                # containing a list of validation results.
-                results = result.get(
-                    "results"
-                )
-
-                if isinstance(
-                    results,
-                    list,
-                ):
-
-                    failures = 0
-
-                    for item in results:
-
-                        if isinstance(
-                            item,
-                            dict,
-                        ):
-
-                            item_success = item.get(
-                                "success"
-                            )
-
-                            if item_success is None:
-                                item_success = item.get(
-                                    "valid"
-                                )
-
-                            if item_success is None:
-                                item_success = item.get(
-                                    "ok",
-                                    True,
-                                )
-
-                            if not item_success:
-                                failures += 1
-
-                    success = failures == 0
-
-                else:
-                    success = False
-
-            return (
-                bool(success),
-                safe_json(result),
-            )
-
-        return (
-            False,
-            str(result),
-        )
-
-    # -----------------------------------------------------------------------
-    # Prepare server
-    # -----------------------------------------------------------------------
-
-    def prepare_current(
-        self,
-    ) -> None:
-
-        answer = QMessageBox.question(
-            self,
-            "Prepare Server",
-            (
-                "This will create/verify the Alcalay "
-                "server directories and configuration.\n\n"
-                "It will NOT install PostgreSQL, perform OAuth, "
-                "or start the API service.\n\n"
-                "Continue?"
-            ),
-            QMessageBox.Yes
-            | QMessageBox.No,
-        )
-
-        if answer != QMessageBox.Yes:
-            return
-
-        try:
-
-            configuration = (
-                self.build_current_configuration()
-            )
-
-            result = prepare_server(
-                configuration
-            )
-
-            if result.success:
+            if show_message:
 
                 QMessageBox.information(
                     self,
-                    "Prepare Server",
-                    result.message,
+                    "שמירה",
+                    "התצורה נשמרה בהצלחה.\n\n"
+                    f"{config_path}",
                 )
-
-            else:
-
-                QMessageBox.warning(
-                    self,
-                    "Prepare Server",
-                    result.message,
-                )
-
-        except Exception as exc:
-
-            QMessageBox.critical(
-                self,
-                "Prepare Server",
-                str(exc),
-            )
-
-    # -----------------------------------------------------------------------
-    # Full setup
-    # -----------------------------------------------------------------------
-
-    def full_setup(
-        self,
-    ) -> None:
-
-        answer = QMessageBox.question(
-            self,
-            "Run Full Setup",
-            (
-                "Run the complete Alcalay setup workflow?\n\n"
-                "This prepares the local Alcalay filesystem "
-                "and executes all setup checks.\n\n"
-                "External services are not automatically "
-                "installed, authenticated, or started."
-            ),
-            QMessageBox.Yes
-            | QMessageBox.No,
-        )
-
-        if answer != QMessageBox.Yes:
-            return
-
-        self.validation_step.set_running()
-
-        self.show_step(
-            10
-        )
-
-        QApplication.processEvents()
-
-        try:
-
-            configuration = (
-                self.build_current_configuration()
-            )
-
-            execution = run_full_setup(
-                configuration
-            )
-
-            self.validation_step.set_result(
-                execution.success,
-                execution.message,
-                execution.report,
-            )
-
-            if execution.success:
-
-                QMessageBox.information(
-                    self,
-                    "Full Setup",
-                    execution.message,
-                )
-
-            else:
-
-                QMessageBox.warning(
-                    self,
-                    "Full Setup",
-                    execution.message,
-                )
-
-        except Exception as exc:
-
-            self.validation_step.set_result(
-                False,
-                f"Full setup failed: {exc}",
-                {},
-            )
-
-            QMessageBox.critical(
-                self,
-                "Full Setup",
-                str(exc),
-            )
-
-    # -----------------------------------------------------------------------
-    # Save
-    # -----------------------------------------------------------------------
-
-    def save_configuration(
-        self,
-    ) -> bool:
-
-        try:
-
-            configuration = (
-                self.build_current_configuration()
-            )
-
-            result = validate_configuration(
-                configuration
-            )
-
-            valid, _message = (
-                self.interpret_validation_result(
-                    result
-                )
-            )
-
-            if not valid:
-
-                answer = QMessageBox.question(
-                    self,
-                    "Validation",
-                    (
-                        "The configuration contains validation "
-                        "issues.\n\n"
-                        "Do you want to save it anyway?"
-                    ),
-                    QMessageBox.Yes
-                    | QMessageBox.No,
-                )
-
-                if answer != QMessageBox.Yes:
-                    return False
-
-            create_server_directories(
-                configuration
-            )
-
-            path = write_configuration(
-                configuration
-            )
-
-            QMessageBox.information(
-                self,
-                "Configuration Saved",
-                (
-                    "Alcalay configuration saved successfully.\n\n"
-                    f"{path}"
-                ),
-            )
 
             return True
 
         except Exception as exc:
 
-            QMessageBox.critical(
-                self,
-                "Save Configuration",
-                str(exc),
+            message = (
+                f"שגיאה בשמירת התצורה: {exc}"
             )
+
+            self.validation_step.append_activity(
+                f"{timestamp()}  {message}"
+            )
+
+            if show_message:
+
+                QMessageBox.critical(
+                    self,
+                    "שגיאה בשמירה",
+                    message,
+                )
 
             return False
 
-    # -----------------------------------------------------------------------
-    # Finish
-    # -----------------------------------------------------------------------
+    def current_page_index(
+        self,
+    ) -> int:
 
-    def finish_setup(
+        return self.stack.currentIndex()
+
+    def next_page(self) -> None:
+
+        index = self.current_page_index()
+
+        if index < self.stack.count() - 1:
+
+            self.stack.setCurrentIndex(
+                index + 1
+            )
+
+    def previous_page(self) -> None:
+
+        index = self.current_page_index()
+
+        if index > 0:
+
+            self.stack.setCurrentIndex(
+                index - 1
+            )
+
+    def go_to_validation(self) -> None:
+
+        self.stack.setCurrentWidget(
+            self.validation_step
+        )
+
+        self.start_validation()
+
+    def update_navigation(self) -> None:
+
+        index = self.current_page_index()
+
+        last_index = (
+            self.stack.count() - 1
+        )
+
+        self.previous_button.setEnabled(
+            index > 0
+        )
+
+        self.next_button.setEnabled(
+            index < last_index
+        )
+
+        self.validate_button.setEnabled(
+            self.validation_thread is None
+            or not self.validation_thread.isRunning()
+        )
+
+    def start_validation(self) -> None:
+
+        if (
+            self.validation_thread is not None
+            and self.validation_thread.isRunning()
+        ):
+            return
+
+        try:
+
+            configuration = (
+                self.build_current_configuration()
+            )
+
+            self.last_configuration = (
+                configuration
+            )
+
+        except Exception as exc:
+
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                "לא ניתן לבנות את התצורה:\n\n"
+                f"{exc}",
+            )
+
+            return
+
+        self.validation_step.reset()
+
+        self.validation_step.append_activity(
+            f"{timestamp()}  "
+            "מתחיל תהליך Validation..."
+        )
+
+        self.validation_step.start_button.setEnabled(
+            False
+        )
+
+        self.validation_step.stop_button.setEnabled(
+            True
+        )
+
+        self.previous_button.setEnabled(
+            False
+        )
+
+        self.next_button.setEnabled(
+            False
+        )
+
+        self.validate_button.setEnabled(
+            False
+        )
+
+        thread = QThread(
+            self
+        )
+
+        worker = ValidationWorker(
+            configuration
+        )
+
+        worker.moveToThread(
+            thread
+        )
+
+        self.validation_thread = (
+            thread
+        )
+
+        self.validation_worker = (
+            worker
+        )
+
+        thread.started.connect(
+            worker.run
+        )
+
+        worker.progress.connect(
+            self.on_validation_progress
+        )
+
+        worker.stage_started.connect(
+            self.on_stage_started
+        )
+
+        worker.activity.connect(
+            self.validation_step.append_activity
+        )
+
+        worker.stage_finished.connect(
+            self.on_stage_finished
+        )
+
+        worker.completed.connect(
+            self.on_validation_completed
+        )
+
+        worker.stopped.connect(
+            self.on_validation_stopped
+        )
+
+        worker.failed.connect(
+            self.on_validation_failed
+        )
+
+        worker.completed.connect(
+            thread.quit
+        )
+
+        worker.stopped.connect(
+            thread.quit
+        )
+
+        worker.failed.connect(
+            thread.quit
+        )
+
+        thread.finished.connect(
+            self.cleanup_validation_thread
+        )
+
+        thread.start()
+
+    def stop_validation(self) -> None:
+
+        worker = (
+            self.validation_worker
+        )
+
+        if worker is None:
+            return
+
+        self.validation_step.append_activity(
+            f"{timestamp()}  "
+            "שולח בקשת עצירה..."
+        )
+
+        worker.request_stop()
+
+        self.validation_step.stop_button.setEnabled(
+            False
+        )
+
+    @Slot(int)
+    def on_validation_progress(
+        self,
+        value: int,
+    ) -> None:
+
+        self.validation_step.progress.setValue(
+            value
+        )
+
+    @Slot(int, str)
+    def on_stage_started(
+        self,
+        index: int,
+        name: str,
+    ) -> None:
+
+        self.validation_step.current_stage.setText(
+            name
+        )
+
+        if (
+            0 <= index - 1
+            < self.validation_step.stage_list.count()
+        ):
+
+            item = (
+                self.validation_step.stage_list.item(
+                    index - 1
+                )
+            )
+
+            item.setText(
+                f"→ {name}"
+            )
+
+    @Slot(
+        int,
+        str,
+        bool,
+        str,
+    )
+    def on_stage_finished(
+        self,
+        index: int,
+        name: str,
+        ok: bool,
+        message: str,
+    ) -> None:
+
+        if (
+            0 <= index - 1
+            < self.validation_step.stage_list.count()
+        ):
+
+            item = (
+                self.validation_step.stage_list.item(
+                    index - 1
+                )
+            )
+
+            prefix = (
+                "✓"
+                if ok
+                else "✗"
+            )
+
+            item.setText(
+                f"{prefix} {name} — {message}"
+            )
+
+            item.setForeground(
+                Qt.darkGreen
+                if ok
+                else Qt.red
+            )
+
+    @Slot(object)
+    def on_validation_completed(
+        self,
+        result: Dict[str, Any],
+    ) -> None:
+
+        ok = bool(
+            result.get("ok")
+        )
+
+        configuration = (
+            result.get("configuration")
+            or self.last_configuration
+        )
+
+        self.last_configuration = (
+            configuration
+        )
+
+        self.validation_step.progress.setValue(
+            100
+        )
+
+        self.validation_step.stop_button.setEnabled(
+            False
+        )
+
+        self.validation_step.start_button.setEnabled(
+            True
+        )
+
+        if ok:
+
+            self.validation_step.status_label.setText(
+                "✓ Validation הסתיים בהצלחה."
+            )
+
+            self.validation_step.status_label.setStyleSheet(
+                "font-weight: bold; color: green;"
+            )
+
+            self.validation_step.append_activity(
+                f"{timestamp()}  "
+                "כל שלבי ה-Validation עברו בהצלחה."
+            )
+
+            saved = self.save_configuration(
+                show_message=False,
+                configuration=configuration,
+            )
+
+            if saved:
+
+                self.validation_step.append_activity(
+                    f"{timestamp()}  "
+                    "התצורה נשמרה אוטומטית לאחר Validation."
+                )
+
+                QMessageBox.information(
+                    self,
+                    "Validation",
+                    "Validation הסתיים בהצלחה.\n\n"
+                    "התצורה נשמרה.",
+                )
+
+            else:
+
+                QMessageBox.warning(
+                    self,
+                    "Validation",
+                    "Validation הסתיים בהצלחה,\n"
+                    "אך שמירת התצורה נכשלה.",
+                )
+
+        else:
+
+            self.validation_step.status_label.setText(
+                "✗ Validation הסתיים — נמצאו בעיות."
+            )
+
+            self.validation_step.status_label.setStyleSheet(
+                "font-weight: bold; color: red;"
+            )
+
+            self.validation_step.append_activity(
+                f"{timestamp()}  "
+                "נמצאו בעיות. התצורה לא נשמרה אוטומטית."
+            )
+
+            QMessageBox.warning(
+                self,
+                "Validation",
+                "Validation הסתיים.\n\n"
+                "נמצאו בעיות שיש לבדוק ב-Activity Log.",
+            )
+
+    @Slot()
+    def on_validation_stopped(
         self,
     ) -> None:
 
-        if not self.save_configuration():
-            return
-
-        QMessageBox.information(
-            self,
-            "Alcalay Setup",
-            (
-                "The Alcalay setup configuration has been saved.\n\n"
-                "The next implementation phases are:\n"
-                "• PostgreSQL database/user setup\n"
-                "• Database migrations\n"
-                "• Google Drive OAuth\n"
-                "• Gmail OAuth\n"
-                "• Document processing\n"
-                "• Search indexing\n"
-                "• API service management"
-            ),
+        self.validation_step.status_label.setText(
+            "ה־Validation הופסק."
         )
 
-        self.close()
+        self.validation_step.status_label.setStyleSheet(
+            "font-weight: bold; color: orange;"
+        )
 
-    # -----------------------------------------------------------------------
-    # Close
-    # -----------------------------------------------------------------------
+        self.validation_step.stop_button.setEnabled(
+            False
+        )
+
+        self.validation_step.start_button.setEnabled(
+            True
+        )
+
+        self.validation_step.append_activity(
+            f"{timestamp()}  "
+            "תהליך ה-Validation הופסק."
+        )
+
+    @Slot(str)
+    def on_validation_failed(
+        self,
+        message: str,
+    ) -> None:
+
+        self.validation_step.status_label.setText(
+            "✗ שגיאה ב־Validation."
+        )
+
+        self.validation_step.status_label.setStyleSheet(
+            "font-weight: bold; color: red;"
+        )
+
+        self.validation_step.stop_button.setEnabled(
+            False
+        )
+
+        self.validation_step.start_button.setEnabled(
+            True
+        )
+
+        self.validation_step.append_activity(
+            f"{timestamp()}  {message}"
+        )
+
+        QMessageBox.critical(
+            self,
+            "Validation Error",
+            message,
+        )
+
+    @Slot()
+    def cleanup_validation_thread(
+        self,
+    ) -> None:
+
+        thread = (
+            self.validation_thread
+        )
+
+        worker = (
+            self.validation_worker
+        )
+
+        if worker is not None:
+            worker.deleteLater()
+
+        if thread is not None:
+            thread.deleteLater()
+
+        self.validation_worker = None
+
+        self.validation_thread = None
+
+        self.validation_step.stop_button.setEnabled(
+            False
+        )
+
+        self.validation_step.start_button.setEnabled(
+            True
+        )
+
+        self.validate_button.setEnabled(
+            True
+        )
+
+        self.update_navigation()
 
     def closeEvent(
         self,
         event,
     ) -> None:
 
-        answer = QMessageBox.question(
-            self,
-            "Exit Setup",
-            (
-                "Do you want to save the current "
-                "Alcalay configuration before exiting?"
-            ),
-            QMessageBox.Save
-            | QMessageBox.Discard
-            | QMessageBox.Cancel,
-        )
+        if (
+            self.validation_thread is not None
+            and self.validation_thread.isRunning()
+        ):
 
-        if answer == QMessageBox.Save:
+            answer = QMessageBox.question(
+                self,
+                "יציאה",
+                "Validation עדיין מתבצע.\n\n"
+                "האם לעצור את התהליך ולצאת?",
+                QMessageBox.Yes
+                | QMessageBox.No,
+                QMessageBox.No,
+            )
 
-            if self.save_configuration():
-                event.accept()
+            if answer != QMessageBox.Yes:
 
-            else:
                 event.ignore()
+                return
 
-        elif answer == QMessageBox.Discard:
+            if self.validation_worker is not None:
 
-            event.accept()
+                self.validation_worker.request_stop()
 
-        else:
+            self.validation_thread.quit()
 
-            event.ignore()
+            if not self.validation_thread.wait(
+                3000
+            ):
 
+                event.ignore()
+                return
 
-# ===========================================================================
-# Application styling
-# ===========================================================================
-
-def apply_style(
-    application: QApplication,
-) -> None:
-
-    font = choose_ui_font()
-
-    application.setFont(
-        font
-    )
-
-    application.setStyleSheet(
-        """
-        QWidget {
-            font-size: 13px;
-        }
-
-        QLabel#appTitle {
-            font-size: 26px;
-            font-weight: bold;
-        }
-
-        QLabel#appSubtitle {
-            font-size: 17px;
-            margin-left: 10px;
-        }
-
-        QLabel#stepTitle {
-            font-size: 22px;
-            font-weight: bold;
-        }
-
-        QLabel#stepDescription {
-            font-size: 13px;
-        }
-
-        QPushButton {
-            min-height: 32px;
-            padding-left: 12px;
-            padding-right: 12px;
-        }
-
-        QPushButton:checked {
-            font-weight: bold;
-        }
-
-        QLineEdit,
-        QComboBox,
-        QSpinBox {
-            min-height: 30px;
-        }
-
-        QGroupBox {
-            font-weight: bold;
-            margin-top: 10px;
-        }
-
-        QGroupBox::title {
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 4px;
-        }
-
-        QPlainTextEdit {
-            font-family: monospace;
-        }
-        """
-    )
+        event.accept()
 
 
-# ===========================================================================
-# Main
-# ===========================================================================
+def main() -> int:
 
-def main() -> None:
-
-    application = QApplication(
+    app = QApplication(
         sys.argv
     )
 
-    application.setApplicationName(
+    app.setApplicationName(
         APP_NAME
-    )
-
-    application.setApplicationVersion(
-        SETUP_VERSION
-    )
-
-    apply_style(
-        application
     )
 
     window = SetupWindow()
 
     window.show()
 
-    sys.exit(
-        application.exec()
-    )
+    return app.exec()
 
 
 if __name__ == "__main__":
-    main()
+
+    raise SystemExit(
+        main()
+    )

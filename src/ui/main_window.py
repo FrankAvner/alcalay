@@ -11,7 +11,7 @@ The main window is responsible only for:
     - Navigation
     - Opening application modules
 
-Gmail logic is intentionally NOT handled here.
+Google/Gmail logic is intentionally NOT handled here.
 
 Location:
     src/ui/main_window.py
@@ -31,18 +31,18 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QStackedWidget,
-    QVBoxLayout, 
+    QVBoxLayout,
     QWidget,
     QPushButton,
 )
 
 
 # ----------------------------------------------------------------------
-# Gmail window import
+# Google / Gmail window imports
 # ----------------------------------------------------------------------
 
 from gmail.gmail_window import GmailWindow
-    
+from gmail.gmail_search_window import GmailSearchWindow
 
 
 # ----------------------------------------------------------------------
@@ -50,7 +50,7 @@ from gmail.gmail_window import GmailWindow
 # ----------------------------------------------------------------------
 
 MENU_ITEMS = [
-    (1, "חיפוש Gmail"),
+    (1, "Google"),
     (2, "חיפוש מסמכים"),
     (3, "חיפוש מתקדם"),
     (4, "מקורות מידע"),
@@ -131,16 +131,18 @@ class PlaceholderPage(QWidget):
 
 
 # ======================================================================
-# Gmail launcher page
+# Google launcher page
 # ======================================================================
 
-class GmailLauncherPage(QWidget):
+class GoogleLauncherPage(QWidget):
     """
-    Launcher page for the dedicated Gmail window.
+    Google launcher page.
 
-    This page does NOT contain Gmail logic.
+    This page only provides navigation to the dedicated
+    Gmail modules.
 
-    It only opens GmailWindow.
+    Google/Gmail business logic is handled by the dedicated
+    Gmail windows.
     """
 
     def __init__(
@@ -168,7 +170,7 @@ class GmailLauncherPage(QWidget):
         # --------------------------------------------------------------
 
         title = QLabel(
-            "1. חיפוש Gmail"
+            "Google"
         )
 
         title.setObjectName(
@@ -189,8 +191,7 @@ class GmailLauncherPage(QWidget):
         # --------------------------------------------------------------
 
         description = QLabel(
-            "ניהול Gmail מתבצע בחלון ייעודי ונפרד "
-            "ממסך הבית של Alcalay."
+            "בחר את הפעולה הרצויה מול שירותי Google."
         )
 
         description.setObjectName(
@@ -210,116 +211,213 @@ class GmailLauncherPage(QWidget):
             description
         )
 
-        # --------------------------------------------------------------
-        # Information card
-        # --------------------------------------------------------------
+        # ==============================================================
+        # Account management card
+        # ==============================================================
 
-        card = QFrame()
+        accounts_card = QFrame()
 
-        card.setObjectName(
+        accounts_card.setObjectName(
             "moduleCard"
         )
 
-        card_layout = QVBoxLayout(
-            card
+        accounts_layout = QVBoxLayout(
+            accounts_card
         )
 
-        card_layout.setContentsMargins(
+        accounts_layout.setContentsMargins(
             30,
+            25,
             30,
-            30,
-            30,
+            25,
         )
 
-        card_layout.setSpacing(
-            16
+        accounts_layout.setSpacing(
+            14
         )
 
-        title_label = QLabel(
-            "Gmail"
+        accounts_title = QLabel(
+            "1. ניהול והגדרת חשבונות"
         )
 
-        title_label.setObjectName(
+        accounts_title.setObjectName(
             "moduleCardTitle"
         )
 
-        title_label.setAlignment(
+        accounts_title.setAlignment(
             Qt.AlignmentFlag.AlignRight
         )
 
-        card_layout.addWidget(
-            title_label
+        accounts_layout.addWidget(
+            accounts_title
         )
 
-        info = QLabel(
-            "חלון Gmail הייעודי מנהל את החיבור "
-            "ל-Gmail ואת תגיות הדואר. "
-            "בשלב הבא יתווסף אליו ניהול מספר חשבונות "
-            "ו-Labels מקושרים."
+        accounts_info = QLabel(
+            "ניהול חשבונות Gmail, התחברות לחשבון Google "
+            "וניהול Labels מקושרים."
         )
 
-        info.setObjectName(
+        accounts_info.setObjectName(
             "moduleCardInfo"
         )
 
-        info.setWordWrap(
+        accounts_info.setWordWrap(
             True
         )
 
-        info.setAlignment(
+        accounts_info.setAlignment(
             Qt.AlignmentFlag.AlignRight
             | Qt.AlignmentFlag.AlignTop
         )
 
-        card_layout.addWidget(
-            info
+        accounts_layout.addWidget(
+            accounts_info
         )
 
-        # --------------------------------------------------------------
-        # Open Gmail button
-        # --------------------------------------------------------------
+        accounts_button_layout = QHBoxLayout()
 
-        button_layout = QHBoxLayout()
+        accounts_button_layout.addStretch()
 
-        button_layout.addStretch()
-
-        self.open_gmail_button = QPushButton(
-            "פתח חלון Gmail"
+        self.accounts_button = QPushButton(
+            "ניהול והגדרת חשבונות"
         )
 
-        self.open_gmail_button.setObjectName(
+        self.accounts_button.setObjectName(
             "openModuleButton"
         )
 
-        self.open_gmail_button.setMinimumHeight(
+        self.accounts_button.setMinimumHeight(
             42
         )
 
-        self.open_gmail_button.clicked.connect(
-            self._open_gmail
+        self.accounts_button.clicked.connect(
+            self._open_accounts
         )
 
-        button_layout.addWidget(
-            self.open_gmail_button
+        accounts_button_layout.addWidget(
+            self.accounts_button
         )
 
-        card_layout.addLayout(
-            button_layout
+        accounts_layout.addLayout(
+            accounts_button_layout
         )
 
         layout.addWidget(
-            card
+            accounts_card
+        )
+
+        # ==============================================================
+        # Gmail search card
+        # ==============================================================
+
+        search_card = QFrame()
+
+        search_card.setObjectName(
+            "moduleCard"
+        )
+
+        search_layout = QVBoxLayout(
+            search_card
+        )
+
+        search_layout.setContentsMargins(
+            30,
+            25,
+            30,
+            25,
+        )
+
+        search_layout.setSpacing(
+            14
+        )
+
+        search_title = QLabel(
+            "2. חיפוש במיילים בלבד"
+        )
+
+        search_title.setObjectName(
+            "moduleCardTitle"
+        )
+
+        search_title.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+        )
+
+        search_layout.addWidget(
+            search_title
+        )
+
+        search_info = QLabel(
+            "חיפוש ישיר בהודעות Gmail בלבד, "
+            "ללא חיפוש במסמכים המקומיים או במקורות אחרים."
+        )
+
+        search_info.setObjectName(
+            "moduleCardInfo"
+        )
+
+        search_info.setWordWrap(
+            True
+        )
+
+        search_info.setAlignment(
+            Qt.AlignmentFlag.AlignRight
+            | Qt.AlignmentFlag.AlignTop
+        )
+
+        search_layout.addWidget(
+            search_info
+        )
+
+        search_button_layout = QHBoxLayout()
+
+        search_button_layout.addStretch()
+
+        self.search_button = QPushButton(
+            "חיפוש במיילים בלבד"
+        )
+
+        self.search_button.setObjectName(
+            "openModuleButton"
+        )
+
+        self.search_button.setMinimumHeight(
+            42
+        )
+
+        self.search_button.clicked.connect(
+            self._open_gmail_search
+        )
+
+        search_button_layout.addWidget(
+            self.search_button
+        )
+
+        search_layout.addLayout(
+            search_button_layout
+        )
+
+        layout.addWidget(
+            search_card
         )
 
         layout.addStretch()
 
     # ------------------------------------------------------------------
-    # Open Gmail
+    # Open account management
     # ------------------------------------------------------------------
 
-    def _open_gmail(self):
+    def _open_accounts(self):
 
         self.main_window.open_gmail_window()
+
+    # ------------------------------------------------------------------
+    # Open Gmail search
+    # ------------------------------------------------------------------
+
+    def _open_gmail_search(self):
+
+        self.main_window.open_gmail_search_window()
 
 
 # ======================================================================
@@ -346,10 +444,11 @@ class MainWindow(QMainWindow):
         self.page_title = None
 
         # --------------------------------------------------------------
-        # Dedicated Gmail window
+        # Dedicated Gmail windows
         # --------------------------------------------------------------
 
         self.gmail_window = None
+        self.gmail_search_window = None
 
         self._build_ui()
         self._apply_style()
@@ -469,7 +568,7 @@ class MainWindow(QMainWindow):
             0,
             0,
             0,
-            0,
+            0
         )
 
         content_layout.setSpacing(
@@ -502,7 +601,7 @@ class MainWindow(QMainWindow):
             15,
             20,
             15,
-            20,
+            20
         )
 
         menu_layout.setSpacing(
@@ -545,7 +644,7 @@ class MainWindow(QMainWindow):
 
             item.setData(
                 Qt.ItemDataRole.UserRole,
-                number,
+                number
             )
 
             item.setText(
@@ -555,7 +654,7 @@ class MainWindow(QMainWindow):
             item.setSizeHint(
                 QSize(
                     270,
-                    48,
+                    48
                 )
             )
 
@@ -585,7 +684,7 @@ class MainWindow(QMainWindow):
 
             page = self._create_page(
                 number,
-                title,
+                title
             )
 
             self.stack.addWidget(
@@ -594,7 +693,7 @@ class MainWindow(QMainWindow):
 
         content_layout.addWidget(
             self.stack,
-            1,
+            1
         )
 
         content_layout.addWidget(
@@ -603,7 +702,7 @@ class MainWindow(QMainWindow):
 
         main_layout.addWidget(
             content,
-            1,
+            1
         )
 
         # ==============================================================
@@ -621,16 +720,16 @@ class MainWindow(QMainWindow):
     def _create_page(
         self,
         number: int,
-        title: str,
+        title: str
     ) -> QWidget:
 
         # --------------------------------------------------------------
-        # Gmail
+        # Google
         # --------------------------------------------------------------
 
         if number == 1:
 
-            return GmailLauncherPage(
+            return GoogleLauncherPage(
                 self
             )
 
@@ -685,28 +784,23 @@ class MainWindow(QMainWindow):
             title=f"{number}. {title}",
             description=descriptions.get(
                 number,
-                "",
-            ),
+                ""
+            )
         )
 
     # ------------------------------------------------------------------
-    # Open Gmail window
+    # Open Gmail account management window
     # ------------------------------------------------------------------
 
     def open_gmail_window(self):
 
-        # Gmail module is not available.
         if GmailWindow is None:
 
             self.statusBar().showMessage(
-                "מודול Gmail אינו זמין"
+                "מודול ניהול Gmail אינו זמין"
             )
 
             return
-
-        # --------------------------------------------------------------
-        # Create window only once.
-        # --------------------------------------------------------------
 
         if (
             self.gmail_window is None
@@ -717,18 +811,43 @@ class MainWindow(QMainWindow):
                 self
             )
 
-        # --------------------------------------------------------------
-        # Show and activate.
-        # --------------------------------------------------------------
-
         self.gmail_window.show()
-
         self.gmail_window.raise_()
-
         self.gmail_window.activateWindow()
 
         self.statusBar().showMessage(
-            "חלון Gmail נפתח"
+            "ניהול והגדרת חשבונות Gmail נפתח"
+        )
+
+    # ------------------------------------------------------------------
+    # Open Gmail search window
+    # ------------------------------------------------------------------
+
+    def open_gmail_search_window(self):
+
+        if GmailSearchWindow is None:
+
+            self.statusBar().showMessage(
+                "מודול חיפוש Gmail אינו זמין"
+            )
+
+            return
+
+        if (
+            self.gmail_search_window is None
+            or not self.gmail_search_window.isVisible()
+        ):
+
+            self.gmail_search_window = GmailSearchWindow(
+                self
+            )
+
+        self.gmail_search_window.show()
+        self.gmail_search_window.raise_()
+        self.gmail_search_window.activateWindow()
+
+        self.statusBar().showMessage(
+            "חיפוש במיילים בלבד נפתח"
         )
 
     # ------------------------------------------------------------------
@@ -737,7 +856,7 @@ class MainWindow(QMainWindow):
 
     def _menu_changed(
         self,
-        row: int,
+        row: int
     ):
 
         if row < 0:
