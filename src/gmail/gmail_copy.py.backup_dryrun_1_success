@@ -22,9 +22,8 @@ from database.connection import DatabaseConnection
 from gmail.gmail_connection import GmailConnection
 
 
-DRY_RUN = False
+DRY_RUN = True
 DRY_RUN_MAX_MESSAGES = 1
-COPY_MAX_MESSAGES = 1
 
 DEFAULT_STORAGE_ROOT = PROJECT_ROOT / "storage" / "gmail"
 
@@ -2020,24 +2019,6 @@ class GmailCopy:
             )
             self.log(
                 "[DRY RUN] "
-                + str(len(message_labels) - max_messages)
-                + " הודעות נוספות לא יעובדו."
-            )
-        elif COPY_MAX_MESSAGES is not None:
-            max_messages = min(
-                COPY_MAX_MESSAGES,
-                len(message_labels),
-            )
-            messages_to_process = dict(
-                list(message_labels.items())[:max_messages]
-            )
-            self.log(
-                "[COPY TEST] מוגבל ל-"
-                + str(max_messages)
-                + " הודעה/ות לצורך בדיקה."
-            )
-            self.log(
-                "[COPY TEST] "
                 + str(len(message_labels) - max_messages)
                 + " הודעות נוספות לא יעובדו."
             )
