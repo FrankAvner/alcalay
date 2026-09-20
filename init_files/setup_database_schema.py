@@ -5,6 +5,24 @@ from pathlib import Path
 from typing import Any
 
 
+# ---------------------------------------------------------------------------
+# Project paths
+# ---------------------------------------------------------------------------
+
+CURRENT_FILE = Path(__file__).resolve()
+
+# init_files/setup_database_schema.py
+# parents[0] = init_files
+# parents[1] = alcalay project root
+PROJECT_ROOT = CURRENT_FILE.parents[1]
+
+MIGRATIONS_ROOT = PROJECT_ROOT / "database" / "migrations"
+
+
+# ---------------------------------------------------------------------------
+# Result object
+# ---------------------------------------------------------------------------
+
 @dataclass
 class SchemaResult:
     success: bool
@@ -21,37 +39,34 @@ class SchemaResult:
         }
 
 
+# ---------------------------------------------------------------------------
+# Migration location
+# ---------------------------------------------------------------------------
+
 def find_migrations_root(
     configuration: dict[str, Any],
 ) -> Path:
     """
     Locate the Alcalay database migrations directory.
 
-    The directory is expected to be:
+    Migrations are part of the Alcalay source repository and therefore
+    live under:
 
-        <app_root>/database/migrations
+        <project_root>/database/migrations
+
+    They are intentionally NOT stored under AlcalayServer, which is
+    reserved for runtime data and configuration.
+
+    The configuration argument is retained for compatibility with the
+    setup orchestrator and existing callers.
     """
 
-    paths = configuration.get(
-        "paths",
-        {},
-    )
+    return MIGRATIONS_ROOT
 
-    app_root = paths.get(
-        "app_root"
-    )
 
-    if not app_root:
-        raise ValueError(
-            "Missing paths.app_root in configuration."
-        )
-
-    return (
-        Path(app_root)
-        / "database"
-        / "migrations"
-    )
-
+# ---------------------------------------------------------------------------
+# Migration discovery
+# ---------------------------------------------------------------------------
 
 def discover_migrations(
     configuration: dict[str, Any],
@@ -59,8 +74,11 @@ def discover_migrations(
     """
     Discover SQL migration files.
 
-    Migration files are sorted by filename so they can
-    later be applied in deterministic order.
+    Migration files are sorted by filename so they can later be applied
+    in deterministic order.
+
+    This function only discovers files.
+    It does NOT execute SQL.
     """
 
     migrations_root = find_migrations_root(
@@ -68,6 +86,9 @@ def discover_migrations(
     )
 
     if not migrations_root.exists():
+        return []
+
+    if not migrations_root.is_dir():
         return []
 
     return sorted(
@@ -81,16 +102,24 @@ def discover_migrations(
     )
 
 
+# ---------------------------------------------------------------------------
+# Migration filename validation
+# ---------------------------------------------------------------------------
+
 def validate_migration_names(
     migrations: list[Path],
 ) -> SchemaResult:
     """
     Validate migration filenames.
 
-    Duplicate filenames are impossible within one directory,
-    but this function also verifies that every migration has
-    a non-empty filename.
+    Every migration must have a non-empty filename stem.
+
+    Duplicate filenames are not possible within one directory, but the
+    list is still checked explicitly so the validation remains clear
+    and deterministic.
     """
+
+    seen_names: set[str] = set()
 
     for migration in migrations:
         if not migration.stem.strip():
@@ -103,6 +132,20 @@ def validate_migration_names(
                 migration_count=len(migrations),
             )
 
+        filename = migration.name
+
+        if filename in seen_names:
+            return SchemaResult(
+                success=False,
+                message=(
+                    f"Duplicate migration filename: "
+                    f"{filename}"
+                ),
+                migration_count=len(migrations),
+            )
+
+        seen_names.add(filename)
+
     return SchemaResult(
         success=True,
         message=(
@@ -112,16 +155,28 @@ def validate_migration_names(
     )
 
 
+# ---------------------------------------------------------------------------
+# Schema structure check
+# ---------------------------------------------------------------------------
+
 def check_schema(
     configuration: dict[str, Any],
 ) -> SchemaResult:
     """
     Check the Alcalay migration structure.
 
+    This function does NOT connect to PostgreSQL.
     This function does NOT execute SQL.
+
+    It only verifies that the migration directory can be located and
+    that its SQL migration files have valid filenames.
     """
 
     try:
+        migrations_root = find_migrations_root(
+            configuration
+        )
+
         migrations = discover_migrations(
             configuration
         )
@@ -135,10 +190,6 @@ def check_schema(
         )
 
     if not migrations:
-        migrations_root = find_migrations_root(
-            configuration
-        )
-
         return SchemaResult(
             success=True,
             message=(
@@ -159,13 +210,18 @@ def check_schema(
     return SchemaResult(
         success=True,
         message=(
-            f"Database migration structure is valid. "
-            f"Found {len(migrations)} migration(s)."
+            "Database migration structure is valid. "
+            f"Found {len(migrations)} migration(s) in "
+            f"{migrations_root}."
         ),
         migration_count=len(migrations),
         migrations_applied=0,
     )
 
+
+# ---------------------------------------------------------------------------
+# Dictionary convenience function
+# ---------------------------------------------------------------------------
 
 def check_schema_dict(
     configuration: dict[str, Any],
@@ -179,12 +235,44 @@ def check_schema_dict(
     ).to_dict()
 
 
+# ---------------------------------------------------------------------------
+# Standalone execution
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     print("Alcalay Database Schema Check")
     print("=" * 60)
+
+    print(
+        f"Project root: {PROJECT_ROOT}"
+    )
+
+    print(
+        f"Migrations root: {MIGRATIONS_ROOT}"
+    )
+
+    print()
+
     print(
         "This module checks migration files only."
     )
+
     print(
         "No SQL is executed."
+    )
+
+    print()
+
+    result = check_schema({})
+
+    print(
+        f"Success: {result.success}"
+    )
+
+    print(
+        f"Message: {result.message}"
+    )
+
+    print(
+        f"Migrations found: {result.migration_count}"
     )
