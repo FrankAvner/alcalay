@@ -1,0 +1,96 @@
+{
+  "status": "CANCELLED_BEFORE_MESSAGE_DOWNLOAD",
+  "account": "frank.avner@gmail.com",
+  "dry_run": false,
+  "copy_started_at": "2026-09-20T18:19:24.614873+00:00",
+  "copy_finished_at": "2026-09-20T18:19:51.548876+00:00",
+  "selected_labels": [
+    {
+      "db_id": 1,
+      "label_id": "Label_117",
+      "label_name": "..יוכבד",
+      "message_count": 1046
+    },
+    {
+      "db_id": 4,
+      "label_id": "Label_1554411125997103749",
+      "label_name": "58 בן יהודה תביעה פרויקט",
+      "message_count": 150
+    },
+    {
+      "db_id": 5,
+      "label_id": "Label_7",
+      "label_name": "ben-yehuda",
+      "message_count": 2889
+    },
+    {
+      "db_id": 6,
+      "label_id": "Label_52",
+      "label_name": "bzalel-14",
+      "message_count": 558
+    },
+    {
+      "db_id": 7,
+      "label_id": "Label_6",
+      "label_name": "bzalel-14/bzlel-14",
+      "message_count": 3
+    },
+    {
+      "db_id": 9,
+      "label_id": "Label_35",
+      "label_name": "Ramhal-4",
+      "message_count": 1023
+    },
+    {
+      "db_id": 10,
+      "label_id": "Label_49",
+      "label_name": "prds_rehovot",
+      "message_count": 129
+    },
+    {
+      "db_id": 49,
+      "label_id": "Label_28",
+      "label_name": "netaim-131/netaim",
+      "message_count": 177
+    },
+    {
+      "db_id": 50,
+      "label_id": "Label_3",
+      "label_name": "z_b_ramhal- shai",
+      "message_count": 334
+    },
+    {
+      "db_id": 57,
+      "label_id": "Label_51",
+      "label_name": "ben-yehuda/ben-yehuda-old",
+      "message_count": 357
+    },
+    {
+      "db_id": 62,
+      "label_id": "Label_8",
+      "label_name": "netaim-131",
+      "message_count": 338
+    },
+    {
+      "db_id": 65,
+      "label_id": "Label_9",
+      "label_name": ".avner",
+      "message_count": 6617
+    }
+  ],
+  "messages_found_across_labels": 13621,
+  "unique_messages": 13617,
+  "messages_with_multiple_labels": 4,
+  "stats": {
+    "labels": 12,
+    "messages_found": 13621,
+    "unique_messages": 13617,
+    "messages_new": 0,
+    "messages_existing": 0,
+    "messages_with_multiple_labels": 4,
+    "attachments": 0,
+    "attachments_new": 0,
+    "attachments_existing": 0,
+    "errors": 0
+  }
+}
