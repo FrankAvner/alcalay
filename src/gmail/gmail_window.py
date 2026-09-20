@@ -55,6 +55,10 @@ class GmailWindow(QMainWindow):
         self._apply_style()
         self._load_accounts()
 
+    # ============================================================
+    # UI
+    # ============================================================
+
     def _build_ui(self):
 
         central = QWidget()
@@ -363,7 +367,13 @@ class GmailWindow(QMainWindow):
             """
         )
 
+    # ============================================================
+    # Accounts
+    # ============================================================
+
     def _load_accounts(self):
+
+        current_email = self.selected_email
 
         self.accounts_list.clear()
 
@@ -410,12 +420,37 @@ class GmailWindow(QMainWindow):
                     item
                 )
 
-            if self.accounts_list.count() > 0:
-                self.accounts_list.setCurrentRow(0)
-
-            else:
+            if self.accounts_list.count() == 0:
                 self.selected_email = None
                 self._clear_account_view()
+                return
+
+            target_row = 0
+
+            if current_email:
+
+                for index in range(
+                    self.accounts_list.count()
+                ):
+
+                    item = self.accounts_list.item(
+                        index
+                    )
+
+                    item_email = item.data(
+                        Qt.ItemDataRole.UserRole
+                    )
+
+                    if str(item_email).lower() == str(
+                        current_email
+                    ).lower():
+
+                        target_row = index
+                        break
+
+            self.accounts_list.setCurrentRow(
+                target_row
+            )
 
             self.status_label.setText(
                 "חשבונות Gmail נטענו"
@@ -518,9 +553,13 @@ class GmailWindow(QMainWindow):
                     index
                 )
 
-                if item.data(
-                    Qt.ItemDataRole.UserRole
-                ) == email:
+                if str(
+                    item.data(
+                        Qt.ItemDataRole.UserRole
+                    )
+                ).lower() == str(
+                    email
+                ).lower():
 
                     self.accounts_list.setCurrentItem(
                         item
@@ -622,6 +661,10 @@ class GmailWindow(QMainWindow):
                 f"לא ניתן להסיר את החשבון:\n\n{exc}"
             )
 
+    # ============================================================
+    # Account / Label display
+    # ============================================================
+
     def _clear_account_view(self):
 
         self.selected_account_label.setText(
@@ -645,6 +688,497 @@ class GmailWindow(QMainWindow):
             Qt.ItemDataRole.UserRole
         )
 
+    # ============================================================
+    # PostgreSQL helpers
+    # ============================================================
+
+    def _get_database_connection(self):
+
+        return DatabaseConnection().connect()
+
+    def _get_postgres_gmail_account_id(self):
+
+        if not self.selected_email:
+            raise RuntimeError(
+                "לא נבחר חשבון Gmail."
+            )
+
+        conn = self._get_database_connection()
+
+        try:
+
+            with conn.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    SELECT id
+                    FROM gmail_accounts
+                    WHERE LOWER(email) = LOWER(%s)
+                    LIMIT 1
+                    """,
+                    (
+                        self.selected_email,
+                    ),
+                )
+
+                row = cursor.fetchone()
+
+                if not row:
+
+                    raise RuntimeError(
+                        "חשבון Gmail אינו קיים ב-PostgreSQL:\n"
+                        + self.selected_email
+                    )
+
+                return row[0]
+
+        finally:
+
+            conn.close()
+
+    def _get_postgres_labels(self):
+
+        gmail_account_id = (
+            self._get_postgres_gmail_account_id()
+        )
+
+        conn = self._get_database_connection()
+
+        try:
+
+            with conn.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    SELECT
+                        id,
+                        label_id,
+                        label_name,
+                        label_type,
+                        selected_for_sync,
+                        enabled,
+                        last_history_id,
+                        created_at,
+                        updated_at
+                    FROM gmail_labels
+                    WHERE gmail_account_id = %s
+                    ORDER BY id
+                    """,
+                    (
+                        gmail_account_id,
+                    ),
+                )
+
+                rows = cursor.fetchall()
+
+            labels = []
+
+            for row in rows:
+
+                labels.append(
+                    {
+                        "db_id": row[0],
+                        "id": row[1],
+                        "name": row[2],
+                        "type": row[3],
+                        "selected_for_sync": bool(row[4]),
+                        "enabled": bool(row[5]),
+                        "last_history_id": row[6],
+                        "created_at": row[7],
+                        "updated_at": row[8],
+                    }
+                )
+
+            return labels
+
+        finally:
+
+            conn.close()
+
+    def _get_postgres_selected_labels(self):
+
+        labels = self._get_postgres_labels()
+
+        return [
+            label
+            for label in labels
+            if label.get("selected_for_sync")
+            and label.get("enabled")
+        ]
+
+    def _sync_gmail_labels_to_postgres(
+        self,
+        all_labels,
+    ):
+
+        gmail_account_id = (
+            self._get_postgres_gmail_account_id()
+        )
+
+        inserted = 0
+        updated = 0
+
+        conn = self._get_database_connection()
+
+        try:
+
+            with conn.cursor() as cursor:
+
+                for gmail_label in all_labels:
+
+                    label_id = gmail_label.get(
+                        "id"
+                    )
+
+                    label_name = gmail_label.get(
+                        "name"
+                    )
+
+                    label_type = gmail_label.get(
+                        "type"
+                    )
+
+                    if not label_id or not label_name:
+                        continue
+
+                    cursor.execute(
+                        """
+                        SELECT
+                            id,
+                            selected_for_sync,
+                            enabled
+                        FROM gmail_labels
+                        WHERE gmail_account_id = %s
+                          AND label_id = %s
+                        LIMIT 1
+                        """,
+                        (
+                            gmail_account_id,
+                            str(label_id),
+                        ),
+                    )
+
+                    existing = cursor.fetchone()
+
+                    if existing:
+
+                        cursor.execute(
+                            """
+                            UPDATE gmail_labels
+                            SET
+                                label_name = %s,
+                                label_type = %s,
+                                updated_at = CURRENT_TIMESTAMP
+                            WHERE gmail_account_id = %s
+                              AND label_id = %s
+                            """,
+                            (
+                                str(label_name),
+                                str(label_type or ""),
+                                gmail_account_id,
+                                str(label_id),
+                            ),
+                        )
+
+                        updated += 1
+
+                    else:
+
+                        cursor.execute(
+                            """
+                            INSERT INTO gmail_labels (
+                                gmail_account_id,
+                                label_id,
+                                label_name,
+                                label_type,
+                                selected_for_sync,
+                                enabled
+                            )
+                            VALUES (
+                                %s,
+                                %s,
+                                %s,
+                                %s,
+                                FALSE,
+                                TRUE
+                            )
+                            """,
+                            (
+                                gmail_account_id,
+                                str(label_id),
+                                str(label_name),
+                                str(label_type or ""),
+                            ),
+                        )
+
+                        inserted += 1
+
+                conn.commit()
+
+        except Exception:
+
+            conn.rollback()
+            raise
+
+        finally:
+
+            conn.close()
+
+        return inserted, updated
+
+    def _set_postgres_label_selection(
+        self,
+        label_id,
+        label_name,
+        label_type,
+        selected,
+    ):
+
+        gmail_account_id = (
+            self._get_postgres_gmail_account_id()
+        )
+
+        conn = self._get_database_connection()
+
+        try:
+
+            with conn.cursor() as cursor:
+
+                cursor.execute(
+                    """
+                    UPDATE gmail_labels
+                    SET
+                        label_name = %s,
+                        label_type = COALESCE(
+                            NULLIF(%s, ''),
+                            label_type
+                        ),
+                        selected_for_sync = %s,
+                        enabled = TRUE,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE gmail_account_id = %s
+                      AND label_id = %s
+                    """,
+                    (
+                        str(label_name or ""),
+                        str(label_type or ""),
+                        bool(selected),
+                        gmail_account_id,
+                        str(label_id),
+                    ),
+                )
+
+                if cursor.rowcount == 0:
+
+                    cursor.execute(
+                        """
+                        INSERT INTO gmail_labels (
+                            gmail_account_id,
+                            label_id,
+                            label_name,
+                            label_type,
+                            selected_for_sync,
+                            enabled
+                        )
+                        VALUES (
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            %s,
+                            TRUE
+                        )
+                        """,
+                        (
+                            gmail_account_id,
+                            str(label_id),
+                            str(label_name or ""),
+                            str(label_type or ""),
+                            bool(selected),
+                        ),
+                    )
+
+                conn.commit()
+
+        except Exception:
+
+            conn.rollback()
+            raise
+
+        finally:
+
+            conn.close()
+
+    # ============================================================
+    # JSON <-> PostgreSQL synchronization
+    # ============================================================
+
+    def _sync_json_from_postgres(self):
+
+        if not self.selected_email:
+            return 0
+
+        postgres_labels = self._get_postgres_labels()
+
+        accounts = self.accounts_manager.get_accounts()
+
+        target_account = None
+
+        for account in accounts:
+
+            if not isinstance(account, dict):
+                continue
+
+            email = (
+                account.get("email")
+                or account.get("address")
+                or account.get("account_email")
+            )
+
+            if email and str(email).lower() == str(
+                self.selected_email
+            ).lower():
+
+                target_account = account
+                break
+
+        if target_account is None:
+            return 0
+
+        old_labels = target_account.get(
+            "labels",
+            []
+        )
+
+        old_by_id = {}
+
+        for old_label in old_labels:
+
+            if isinstance(old_label, str):
+
+                old_by_id[str(old_label)] = {
+                    "id": str(old_label),
+                    "name": str(old_label),
+                }
+
+                continue
+
+            if not isinstance(old_label, dict):
+                continue
+
+            old_id = (
+                old_label.get("id")
+                or old_label.get("label_id")
+            )
+
+            if old_id:
+
+                old_by_id[str(old_id)] = old_label
+
+        new_labels = []
+
+        for pg_label in postgres_labels:
+
+            label_id = pg_label.get(
+                "id"
+            )
+
+            label_name = pg_label.get(
+                "name"
+            )
+
+            if not label_id:
+                continue
+
+            old = old_by_id.get(
+                str(label_id),
+                {}
+            )
+
+            if not isinstance(old, dict):
+                old = {}
+
+            new_label = dict(old)
+
+            new_label["id"] = str(
+                label_id
+            )
+
+            new_label["name"] = (
+                label_name
+                or str(label_id)
+            )
+
+            new_label["label_id"] = str(
+                label_id
+            )
+
+            new_label["label_name"] = (
+                label_name
+                or str(label_id)
+            )
+
+            new_label["selected_for_sync"] = bool(
+                pg_label.get(
+                    "selected_for_sync"
+                )
+            )
+
+            new_label["enabled"] = bool(
+                pg_label.get(
+                    "enabled"
+                )
+            )
+
+            new_label["label_type"] = (
+                pg_label.get(
+                    "type"
+                )
+                or ""
+            )
+
+            if "last_fetch" not in new_label:
+                new_label["last_fetch"] = None
+
+            if "last_local_save" not in new_label:
+                new_label["last_local_save"] = None
+
+            if "history_id" not in new_label:
+                new_label["history_id"] = (
+                    pg_label.get(
+                        "last_history_id"
+                    )
+                )
+
+            if "destination" not in new_label:
+                new_label["destination"] = "local"
+
+            new_labels.append(
+                new_label
+            )
+
+        target_account["labels"] = new_labels
+
+        save_method = getattr(
+            self.accounts_manager,
+            "save",
+            None
+        )
+
+        if not callable(save_method):
+
+            raise RuntimeError(
+                "GmailAccountsManager אינו מספק save()."
+            )
+
+        save_method()
+
+        return len(new_labels)
+
+    # ============================================================
+    # Label display
+    # ============================================================
+
     def _load_linked_labels(self):
 
         self.linked_labels_list.clear()
@@ -654,45 +1188,80 @@ class GmailWindow(QMainWindow):
 
         try:
 
-            labels = self.accounts_manager.get_labels(
-                self.selected_email
+            # ----------------------------------------------------
+            # PostgreSQL הוא מקור הבחירה.
+            # לאחר הקריאה ממנו מסנכרנים גם את JSON.
+            # ----------------------------------------------------
+
+            selected_labels = (
+                self._get_postgres_selected_labels()
             )
 
-            if not labels:
-                return
+            self._sync_json_from_postgres()
 
-            for label in labels:
+            for label in selected_labels:
 
-                if isinstance(label, str):
-
-                    label_id = label
-                    label_name = label
-                    last_fetch = None
-
-                else:
-
-                    label_id = (
-                        label.get("id")
-                        or label.get("label_id")
-                    )
-
-                    label_name = (
-                        label.get("name")
-                        or label.get("label_name")
-                        or label_id
-                    )
-
-                    last_fetch = (
-                        label.get("last_fetch")
-                        or label.get("last_fetched")
-                        or label.get("last_refresh")
-                    )
-
-                text = str(
-                    label_name
+                label_id = label.get(
+                    "id"
                 )
 
+                label_name = label.get(
+                    "name"
+                )
+
+                if not label_id:
+                    continue
+
+                text = str(
+                    label_name or label_id
+                )
+
+                last_fetch = None
+
+                try:
+
+                    json_labels = (
+                        self.accounts_manager.get_labels(
+                            self.selected_email
+                        )
+                    )
+
+                    for json_label in json_labels:
+
+                        if not isinstance(
+                            json_label,
+                            dict
+                        ):
+                            continue
+
+                        json_id = (
+                            json_label.get("id")
+                            or json_label.get("label_id")
+                        )
+
+                        if str(json_id) == str(
+                            label_id
+                        ):
+
+                            last_fetch = (
+                                json_label.get(
+                                    "last_fetch"
+                                )
+                                or json_label.get(
+                                    "last_fetched"
+                                )
+                                or json_label.get(
+                                    "last_refresh"
+                                )
+                            )
+
+                            break
+
+                except Exception:
+                    last_fetch = None
+
                 if last_fetch:
+
                     text += (
                         "    |    "
                         + self._format_datetime(
@@ -712,6 +1281,11 @@ class GmailWindow(QMainWindow):
                 item.setData(
                     Qt.ItemDataRole.UserRole + 1,
                     label_name
+                )
+
+                item.setData(
+                    Qt.ItemDataRole.UserRole + 2,
+                    label.get("type") or ""
                 )
 
                 self.linked_labels_list.addItem(
@@ -752,24 +1326,27 @@ class GmailWindow(QMainWindow):
                 connection
             )
 
-            linked_ids = set()
+            # ----------------------------------------------------
+            # כל Label שקיים ב-Gmail חייב להיות גם ב-PostgreSQL.
+            # זה גם מאפשר לרענן את המאגר במקרה של Label חדש.
+            # ----------------------------------------------------
 
-            for index in range(
-                self.linked_labels_list.count()
-            ):
+            self._sync_gmail_labels_to_postgres(
+                all_labels
+            )
 
-                item = self.linked_labels_list.item(
-                    index
-                )
+            # ----------------------------------------------------
+            # לאחר מכן PostgreSQL קובע מי נבחר ומי לא.
+            # ----------------------------------------------------
 
-                label_id = item.data(
-                    Qt.ItemDataRole.UserRole
-                )
+            postgres_labels = self._get_postgres_labels()
 
-                if label_id:
-                    linked_ids.add(
-                        str(label_id)
-                    )
+            selected_ids = {
+                str(label.get("id"))
+                for label in postgres_labels
+                if label.get("selected_for_sync")
+                and label.get("enabled")
+            }
 
             labels = []
 
@@ -786,7 +1363,7 @@ class GmailWindow(QMainWindow):
                 if not label_id or not label_name:
                     continue
 
-                if str(label_id) in linked_ids:
+                if str(label_id) in selected_ids:
                     continue
 
                 labels.append(
@@ -838,6 +1415,10 @@ class GmailWindow(QMainWindow):
             self.status_label.setText(
                 f"שגיאה בטעינת תגיות Gmail: {exc}"
             )
+
+    # ============================================================
+    # Gmail API
+    # ============================================================
 
     def _get_all_gmail_labels(self, connection):
 
@@ -908,6 +1489,10 @@ class GmailWindow(QMainWindow):
 
         return labels
 
+    # ============================================================
+    # Label selection
+    # ============================================================
+
     def _add_label_by_double_click(self, item):
 
         if item is None:
@@ -924,16 +1509,35 @@ class GmailWindow(QMainWindow):
             Qt.ItemDataRole.UserRole + 1
         )
 
+        label_type = item.data(
+            Qt.ItemDataRole.UserRole + 2
+        )
+
         if not label_name:
             label_name = item.text()
 
         try:
 
-            self.accounts_manager.add_label(
-                self.selected_email,
-                label_id,
-                label_name
+            # ----------------------------------------------------
+            # PostgreSQL
+            # ----------------------------------------------------
+
+            self._set_postgres_label_selection(
+                label_id=label_id,
+                label_name=label_name,
+                label_type=label_type,
+                selected=True,
             )
+
+            # ----------------------------------------------------
+            # JSON
+            # ----------------------------------------------------
+
+            self._sync_json_from_postgres()
+
+            # ----------------------------------------------------
+            # תצוגה
+            # ----------------------------------------------------
 
             self._load_linked_labels()
             self._load_available_labels()
@@ -941,33 +1545,6 @@ class GmailWindow(QMainWindow):
             self.status_label.setText(
                 f"התגית '{label_name}' נוספה"
             )
-
-        except TypeError:
-
-            try:
-
-                self.accounts_manager.add_label(
-                    self.selected_email,
-                    {
-                        "id": label_id,
-                        "name": label_name
-                    }
-                )
-
-                self._load_linked_labels()
-                self._load_available_labels()
-
-                self.status_label.setText(
-                    f"התגית '{label_name}' נוספה"
-                )
-
-            except Exception as exc:
-
-                QMessageBox.critical(
-                    self,
-                    "שגיאה בהוספת תגית",
-                    str(exc)
-                )
 
         except Exception as exc:
 
@@ -1000,6 +1577,10 @@ class GmailWindow(QMainWindow):
             Qt.ItemDataRole.UserRole + 1
         )
 
+        label_type = item.data(
+            Qt.ItemDataRole.UserRole + 2
+        )
+
         if not label_name:
             label_name = item.text()
 
@@ -1019,10 +1600,29 @@ class GmailWindow(QMainWindow):
 
         try:
 
-            self.accounts_manager.remove_label(
-                self.selected_email,
-                label_id
+            # ----------------------------------------------------
+            # PostgreSQL:
+            # לא מוחקים את הרשומה.
+            # רק מבטלים את הבחירה.
+            # ----------------------------------------------------
+
+            self._set_postgres_label_selection(
+                label_id=label_id,
+                label_name=label_name,
+                label_type=label_type,
+                selected=False,
             )
+
+            # ----------------------------------------------------
+            # JSON:
+            # מקבל בדיוק את אותה בחירה מ-PostgreSQL.
+            # ----------------------------------------------------
+
+            self._sync_json_from_postgres()
+
+            # ----------------------------------------------------
+            # תצוגה
+            # ----------------------------------------------------
 
             self._load_linked_labels()
             self._load_available_labels()
@@ -1031,33 +1631,6 @@ class GmailWindow(QMainWindow):
                 f"התגית '{label_name}' הוסרה"
             )
 
-        except TypeError:
-
-            try:
-
-                self.accounts_manager.remove_label(
-                    self.selected_email,
-                    {
-                        "id": label_id,
-                        "name": label_name
-                    }
-                )
-
-                self._load_linked_labels()
-                self._load_available_labels()
-
-                self.status_label.setText(
-                    f"התגית '{label_name}' הוסרה"
-                )
-
-            except Exception as exc:
-
-                QMessageBox.critical(
-                    self,
-                    "שגיאה בהסרת תגית",
-                    str(exc)
-                )
-
         except Exception as exc:
 
             QMessageBox.critical(
@@ -1065,6 +1638,10 @@ class GmailWindow(QMainWindow):
                 "שגיאה בהסרת תגית",
                 str(exc)
             )
+
+    # ============================================================
+    # Search
+    # ============================================================
 
     def _filter_available_labels(self, text):
 
@@ -1089,6 +1666,10 @@ class GmailWindow(QMainWindow):
                 not visible
             )
 
+    # ============================================================
+    # Refresh Gmail Labels
+    # ============================================================
+
     def _refresh_gmail_labels(self):
 
         if not self.selected_email:
@@ -1100,6 +1681,12 @@ class GmailWindow(QMainWindow):
             return
 
         try:
+
+            self.status_label.setText(
+                "מתחבר ל-Gmail ומרענן את רשימת התגיות..."
+            )
+
+            QApplication.processEvents()
 
             connection = GmailConnection(
                 self.selected_email
@@ -1116,64 +1703,72 @@ class GmailWindow(QMainWindow):
 
             self.gmail_connection = connection
 
+            # ----------------------------------------------------
+            # שלב 1:
+            # משיכת כל התגיות העדכניות מ-Gmail.
+            # ----------------------------------------------------
+
             all_labels = self._get_all_gmail_labels(
                 connection
             )
 
-            local_labels = self.accounts_manager.get_labels(
-                self.selected_email
+            if not all_labels:
+
+                self.status_label.setText(
+                    "לא נמצאו תגיות ב-Gmail"
+                )
+
+                return
+
+            # ----------------------------------------------------
+            # שלב 2:
+            # הכנסת תגיות חדשות ועדכון שמות קיימים.
+            #
+            # חשוב:
+            # רשומה קיימת שומרת selected_for_sync.
+            #
+            # רשומה חדשה מתחילה FALSE.
+            # ----------------------------------------------------
+
+            inserted, updated = (
+                self._sync_gmail_labels_to_postgres(
+                    all_labels
+                )
             )
 
-            local_by_id = {}
+            # ----------------------------------------------------
+            # שלב 3:
+            # PostgreSQL -> accounts.json
+            #
+            # כאן מתבצע הסנכרון המרכזי.
+            # JSON מקבל בדיוק את רשימת ה-Labels ואת
+            # selected_for_sync של PostgreSQL.
+            # ----------------------------------------------------
 
-            for label in local_labels:
+            json_count = (
+                self._sync_json_from_postgres()
+            )
 
-                if isinstance(label, str):
-                    continue
-
-                label_id = (
-                    label.get("id")
-                    or label.get("label_id")
-                )
-
-                if label_id:
-                    local_by_id[
-                        str(label_id)
-                    ] = label
-
-            for gmail_label in all_labels:
-
-                label_id = gmail_label.get(
-                    "id"
-                )
-
-                label_name = gmail_label.get(
-                    "name"
-                )
-
-                if not label_id:
-                    continue
-
-                if str(label_id) in local_by_id:
-
-                    local_label = local_by_id[
-                        str(label_id)
-                    ]
-
-                    if isinstance(
-                        local_label,
-                        dict
-                    ):
-
-                        local_label[
-                            "name"
-                        ] = label_name
+            # ----------------------------------------------------
+            # שלב 4:
+            # רענון התצוגה.
+            # ----------------------------------------------------
 
             self._load_linked_labels()
             self._load_available_labels()
 
+            selected_count = len(
+                self._get_postgres_selected_labels()
+            )
+
             self.status_label.setText(
-                f"נמצאו {len(all_labels)} תגיות ב-Gmail"
+                (
+                    f"נמצאו {len(all_labels)} תגיות ב-Gmail | "
+                    f"נוספו {inserted} חדשות | "
+                    f"עודכנו {updated} | "
+                    f"נבחרו {selected_count} | "
+                    f"JSON: {json_count}"
+                )
             )
 
         except Exception as exc:
@@ -1186,6 +1781,14 @@ class GmailWindow(QMainWindow):
                     + str(exc)
                 )
             )
+
+            self.status_label.setText(
+                "שגיאה ברענון תגיות Gmail"
+            )
+
+    # ============================================================
+    # Refresh display
+    # ============================================================
 
     def _refresh_account_display(self):
 
@@ -1217,8 +1820,15 @@ class GmailWindow(QMainWindow):
 
                 break
 
+        # קודם מסנכרנים JSON מ-PostgreSQL.
+        self._sync_json_from_postgres()
+
         self._load_linked_labels()
         self._load_available_labels()
+
+    # ============================================================
+    # Utilities
+    # ============================================================
 
     def _format_datetime(self, value):
 
@@ -1231,6 +1841,7 @@ class GmailWindow(QMainWindow):
                 value,
                 datetime
             ):
+
                 return value.strftime(
                     "%d/%m/%Y %H:%M"
                 )
