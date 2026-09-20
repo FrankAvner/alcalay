@@ -1,4 +1,3 @@
-
 #!/bin/zsh
 
 set -e
@@ -14,23 +13,15 @@ echo " Alcalay - Git Update"
 echo "=========================================="
 echo ""
 
-# --------------------------------------------------
-# 1. Check Git repository
-# --------------------------------------------------
-
 if [ ! -d ".git" ]; then
     echo "ERROR: This directory is not a Git repository:"
     echo "$PROJECT_ROOT"
     exit 1
 fi
 
-# --------------------------------------------------
-# 2. Verify main branch
-# --------------------------------------------------
-
 CURRENT_BRANCH=$(git branch --show-current)
 
-echo "[1/8] Checking Git branch..."
+echo "[1/10] Checking Git branch..."
 echo "Current branch: $CURRENT_BRANCH"
 echo ""
 
@@ -52,11 +43,7 @@ fi
 echo "Git branch: OK"
 echo ""
 
-# --------------------------------------------------
-# 3. Activate Python virtual environment
-# --------------------------------------------------
-
-echo "[2/8] Activating Python virtual environment..."
+echo "[2/10] Activating Python virtual environment..."
 
 if [ ! -f "$VENV/bin/activate" ]; then
     echo "ERROR: Python virtual environment not found:"
@@ -70,11 +57,7 @@ echo "Python:"
 python --version
 echo ""
 
-# --------------------------------------------------
-# 4. Check Python files
-# --------------------------------------------------
-
-echo "[3/8] Checking Python files..."
+echo "[3/10] Checking Python files..."
 
 PYTHON_ERROR=0
 
@@ -92,22 +75,66 @@ fi
 echo "Python syntax check: OK"
 echo ""
 
-# --------------------------------------------------
-# 5. Show current status
-# --------------------------------------------------
+echo "[4/10] Checking PostgreSQL project files..."
 
-echo "[4/8] Current Git status..."
+POSTGRES_FILES=(
+    "database/migrations/001_initial_schema.sql"
+    "init_files/setup_database.py"
+    "init_files/setup_database_schema.py"
+    "src/database/__init__.py"
+    "src/database/connection.py"
+    "src/database/database_manager.py"
+)
+
+POSTGRES_ERROR=0
+
+for FILE in "${POSTGRES_FILES[@]}"; do
+
+    if [ ! -f "$PROJECT_ROOT/$FILE" ]; then
+        echo "ERROR: Required PostgreSQL file is missing:"
+        echo "  $FILE"
+        POSTGRES_ERROR=1
+    fi
+
+done
+
+if [ "$POSTGRES_ERROR" -ne 0 ]; then
+    echo ""
+    echo "ERROR: PostgreSQL project file check failed."
+    echo "Git update aborted."
+    exit 1
+fi
+
+echo "PostgreSQL project files: OK"
 echo ""
 
+echo "PostgreSQL files:"
+for FILE in "${POSTGRES_FILES[@]}"; do
+    echo "  $FILE"
+done
+
+echo ""
+
+echo "[5/10] Checking PostgreSQL configuration protection..."
+
+if git check-ignore -q "config/alcalay_config.json"; then
+    echo "Local database configuration is ignored by Git: OK"
+else
+    echo "WARNING: config/alcalay_config.json is NOT ignored by Git."
+    echo "This file may contain local database configuration."
+    echo ""
+fi
+
+echo "PostgreSQL configuration protection check completed."
+echo ""
+
+echo "[6/10] Current Git status..."
+
+echo ""
 git status --short
-
 echo ""
 
-# --------------------------------------------------
-# 6. Check nested repository / uri_source
-# --------------------------------------------------
-
-echo "[5/8] Checking nested repositories..."
+echo "[7/10] Checking nested repositories..."
 
 if [ -d "$PROJECT_ROOT/uri_source/.git" ] || [ -f "$PROJECT_ROOT/uri_source/.git" ]; then
 
@@ -120,27 +147,29 @@ if [ -d "$PROJECT_ROOT/uri_source/.git" ] || [ -f "$PROJECT_ROOT/uri_source/.git
         cd "$PROJECT_ROOT/uri_source"
 
         if [ -n "$(git status --porcelain)" ]; then
+
             echo "uri_source has uncommitted changes:"
             echo ""
             git status --short
             echo ""
             echo "These changes will NOT be included in the Alcalay commit."
+
         else
+
             echo "uri_source: clean"
+
         fi
     )
 
 else
+
     echo "No nested Git repository detected."
+
 fi
 
 echo ""
 
-# --------------------------------------------------
-# 7. Add and commit ALL Alcalay changes
-# --------------------------------------------------
-
-echo "[6/8] Adding all Alcalay changes..."
+echo "[8/10] Adding all Alcalay changes..."
 
 git add -A
 
@@ -149,10 +178,42 @@ echo "Files staged:"
 git diff --cached --name-status
 echo ""
 
+echo "Checking PostgreSQL files in Git..."
+
+POSTGRES_GIT_ERROR=0
+
+for FILE in "${POSTGRES_FILES[@]}"; do
+
+    if ! git ls-files --error-unmatch "$FILE" >/dev/null 2>&1; then
+
+        echo "ERROR: PostgreSQL file is NOT tracked by Git:"
+        echo "  $FILE"
+
+        POSTGRES_GIT_ERROR=1
+
+    fi
+
+done
+
+if [ "$POSTGRES_GIT_ERROR" -ne 0 ]; then
+
+    echo ""
+    echo "ERROR: PostgreSQL Git verification failed."
+    echo "Git update aborted."
+    exit 1
+
+fi
+
+echo "All PostgreSQL project files are tracked by Git: OK"
+echo ""
+
+echo "[9/10] Creating Git commit..."
+
 if git diff --cached --quiet; then
+
     echo "No new Alcalay changes to commit."
+
 else
-    echo "Creating Git commit..."
 
     COMMIT_MESSAGE="Update Alcalay project"
 
@@ -161,36 +222,31 @@ else
     echo ""
     echo "Commit created:"
     git log -1 --oneline
+
 fi
 
 echo ""
 
-# --------------------------------------------------
-# 8. Push ONLY main
-# --------------------------------------------------
-
-echo "[7/8] Updating GitHub main..."
+echo "Updating GitHub main..."
 
 echo "Remote:"
 git remote get-url origin
 
 echo ""
+
 echo "Pushing:"
 echo "  local  main"
 echo "  remote main"
+
 echo ""
 
 git push -u origin main
 
 echo ""
 
-# --------------------------------------------------
-# Final verification
-# --------------------------------------------------
+echo "[10/10] Final verification..."
 
-echo "[8/8] Final verification..."
 echo ""
-
 echo "=========================================="
 echo " Git update completed successfully"
 echo "=========================================="
@@ -203,6 +259,13 @@ echo ""
 
 echo "Latest commit:"
 git log -1 --oneline
+
+echo ""
+
+echo "PostgreSQL files tracked by Git:"
+for FILE in "${POSTGRES_FILES[@]}"; do
+    echo "  $FILE"
+done
 
 echo ""
 
@@ -220,5 +283,3 @@ echo "=========================================="
 echo " Alcalay Git is synchronized with GitHub"
 echo "=========================================="
 echo ""
-
-
