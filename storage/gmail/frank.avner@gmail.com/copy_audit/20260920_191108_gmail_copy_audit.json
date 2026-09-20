@@ -1,0 +1,30 @@
+{
+  "status": "CANCELLED_BEFORE_COPY",
+  "account": "frank.avner@gmail.com",
+  "copy_mode": "raw_eml_only",
+  "dry_run": false,
+  "copy_started_at": "2026-09-20T19:10:48.283044+00:00",
+  "copy_finished_at": "2026-09-20T19:11:08.683526+00:00",
+  "selected_labels": [
+    {
+      "db_id": 65,
+      "label_id": "Label_9",
+      "label_name": ".avner"
+    }
+  ],
+  "messages_found_across_labels": 6617,
+  "unique_messages": 6617,
+  "messages_with_multiple_labels": 0,
+  "stats": {
+    "labels": 1,
+    "messages_found": 6617,
+    "unique_messages": 6617,
+    "messages_new": 0,
+    "messages_existing": 0,
+    "messages_with_multiple_labels": 0,
+    "raw_messages_downloaded": 0,
+    "raw_messages_saved": 0,
+    "errors": 0,
+    "rate_limit_retries": 0
+  }
+}
