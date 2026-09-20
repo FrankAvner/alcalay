@@ -18,8 +18,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-from src.database.connection import DatabaseConnection
-from src.gmail.gmail_connection import GmailConnection
+from database.connection import connect
+from gmail.gmail_connection import GmailConnection
+
 
 DRY_RUN = True
 
@@ -126,7 +127,7 @@ class GmailCopy:
         )
 
     def get_db_connection(self):
-        return DatabaseConnection().connect()
+        return connect()
 
     def load_database_context(
         self,
@@ -214,247 +215,6 @@ class GmailCopy:
 
         finally:
             conn.close()
-
-    def load_available_labels(self) -> list[dict[str, Any]]:
-
-        conn = self.get_db_connection()
-
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT
-                        id,
-                        label_id,
-                        label_name,
-                        selected_for_sync,
-                        enabled
-                    FROM gmail_labels
-                    WHERE gmail_account_id = %s
-                      AND enabled = TRUE
-                    ORDER BY id
-                    """,
-                    (self.gmail_account_id,),
-                )
-
-                rows = cursor.fetchall()
-
-                return [
-                    {
-                        "id": row[0],
-                        "label_id": row[1],
-                        "label_name": row[2],
-                        "selected_for_sync": row[3],
-                        "enabled": row[4],
-                    }
-                    for row in rows
-                ]
-        finally:
-            conn.close()
-
-    def count_label_messages(self, label_id: str) -> int:
-
-        if self.service is None:
-            raise RuntimeError("Gmail service is not connected.")
-
-        total = 0
-        page_token = None
-
-        while True:
-            response = (
-                self.service.users()
-                .messages()
-                .list(
-                    userId="me",
-                    labelIds=[label_id],
-                    maxResults=500,
-                    pageToken=page_token,
-                )
-                .execute()
-            )
-
-            total += len(response.get("messages", []))
-            page_token = response.get("nextPageToken")
-
-            if not page_token:
-                return total
-
-    def count_all_labels(self, labels: list[dict[str, Any]]) -> None:
-
-        self.log("")
-        self.log("=" * 72)
-        self.log("GMAIL LABEL MESSAGE COUNTS")
-        self.log("=" * 72)
-
-        for index, label in enumerate(labels, 1):
-            count = self.count_label_messages(label["label_id"])
-            label["message_count"] = count
-            selected = " *" if label.get("selected_for_sync") else ""
-            self.log(
-                str(index) + ". "
-                + label["label_name"]
-                + " — " + str(count) + " הודעות"
-                + selected
-            )
-
-        self.log("=" * 72)
-        self.log("* = מסומן כרגע ב-PostgreSQL")
-        self.log("=")
-
-    def parse_label_selection(self, value: str, labels: list[dict[str, Any]]) -> list[int]:
-
-        value = value.strip()
-
-        if not value:
-            return [
-                index
-                for index, label in enumerate(labels, 1)
-                if label.get("selected_for_sync")
-            ]
-
-        if value.upper() == "ALL":
-            return list(range(1, len(labels) + 1))
-
-        selected = set()
-
-        for token in value.split(","):
-            token = token.strip()
-            if not token:
-                continue
-
-            if "-" in token:
-                start_text, end_text = token.split("-", 1)
-                start = int(start_text.strip())
-                end = int(end_text.strip())
-                if start > end:
-                    start, end = end, start
-                selected.update(range(start, end + 1))
-            else:
-                selected.add(int(token))
-
-        if not selected:
-            raise ValueError("לא נבחרו Labels.")
-
-        invalid = [i for i in selected if i < 1 or i > len(labels)]
-        if invalid:
-            raise ValueError("מספר Label לא חוקי: " + ", ".join(map(str, invalid)))
-
-        return sorted(selected)
-
-    def select_labels_for_copy(self, labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
-
-        self.log("")
-        self.log("Labels להעתקה: ניתן לרשום למשל 1,4,7 או 1-3,7")
-        self.log("Enter = להשתמש בבחירה הנוכחית ב-PostgreSQL")
-        self.log("ALL = כל ה-Labels")
-
-        value = input("Labels להעתקה: ")
-        indexes = self.parse_label_selection(value, labels)
-        selected = [labels[index - 1] for index in indexes]
-
-        self.log("")
-        self.log("=" * 72)
-        self.log("ה-Labels שנבחרו להעתקה")
-        self.log("=" * 72)
-
-        for label in selected:
-            self.log(
-                "- " + label["label_name"]
-                + " — " + str(label.get("message_count", 0)) + " הודעות"
-            )
-
-        self.log("=" * 72)
-        return selected
-
-    def save_selected_labels_to_database(self, selected: list[dict[str, Any]], all_labels: list[dict[str, Any]]) -> None:
-
-        if self.dry_run:
-            return
-
-        selected_ids = {label["id"] for label in selected}
-        conn = self.get_db_connection()
-
-        try:
-            with conn.cursor() as cursor:
-                for label in all_labels:
-                    cursor.execute(
-                        """
-                        UPDATE gmail_labels
-                        SET selected_for_sync = %s,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = %s
-                          AND gmail_account_id = %s
-                        """,
-                        (
-                            label["id"] in selected_ids,
-                            label["id"],
-                            self.gmail_account_id,
-                        ),
-                    )
-                conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    def confirm_copy(self, selected: list[dict[str, Any]], unique_count: int) -> bool:
-
-        self.log("")
-        self.log("=" * 72)
-        self.log("אישור COPY")
-        self.log("=" * 72)
-        self.log("מספר Labels שנבחרו: " + str(len(selected)))
-        self.log(
-            "מספר הודעות לפי Labels: "
-            + str(sum(label.get("message_count", 0) for label in selected))
-        )
-        self.log("מספר הודעות ייחודיות: " + str(unique_count))
-        self.log(
-            "הערה: אם הודעה נמצאת ביותר מ-Label אחד שנבחר, היא תועתק פעם אחת בלבד."
-        )
-        self.log("הקשרים לכל ה-Labels שנבחרו יישמרו.")
-        self.log("מצב נוכחי: " + ("DRY RUN" if self.dry_run else "REAL COPY"))
-        if self.dry_run:
-            self.log("לא יישמר מידע בפועל.")
-        self.log("=" * 72)
-
-        answer = input("להמשיך ל-COPY? הקלד YES לאישור: ").strip()
-        return answer == "YES"
-
-    def create_audit_data(self, selected: list[dict[str, Any]], status: str, copy_started_at: str, copy_finished_at: str | None = None) -> dict[str, Any]:
-        return {
-            "status": status,
-            "account": self.account_email,
-            "dry_run": self.dry_run,
-            "copy_started_at": copy_started_at,
-            "copy_finished_at": copy_finished_at,
-            "selected_labels": [
-                {
-                    "db_id": label["id"],
-                    "label_id": label["label_id"],
-                    "label_name": label["label_name"],
-                    "message_count": label.get("message_count", 0),
-                }
-                for label in selected
-            ],
-            "messages_found_across_labels": self.stats["messages_found"],
-            "unique_messages": self.stats["unique_messages"],
-            "messages_with_multiple_labels": self.stats["messages_with_multiple_labels"],
-            "stats": dict(self.stats),
-        }
-
-    def save_audit_file(self, audit_data: dict[str, Any]) -> Path:
-        account_name = self.safe_name(self.account_email)
-        timestamp = self.utc_now().strftime("%Y%m%d_%H%M%S")
-        directory = self.storage_root / account_name / "copy_audit"
-        path = directory / (timestamp + "_gmail_copy_audit.json")
-        directory.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(audit_data, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return path
 
     def connect_gmail(self) -> None:
 
@@ -2019,117 +1779,286 @@ class GmailCopy:
         self,
     ) -> dict[str, Any]:
 
-        self.log("=" * 72)
-        self.log("ALCALAY - GMAIL COPY")
-        self.log("Account: " + self.account_email)
-        self.log("Mode: " + ("DRY RUN" if self.dry_run else "REAL COPY"))
-        self.log("=" * 72)
+        self.log(
+            "=" * 72
+        )
+
+        self.log(
+            "ALCALAY - GMAIL COPY"
+        )
+
+        self.log(
+            "Account: "
+            + self.account_email
+        )
+
+        self.log(
+            "Mode: "
+            + (
+                "DRY RUN"
+                if self.dry_run
+                else "REAL COPY"
+            )
+        )
+
+        self.log(
+            "=" * 72
+        )
 
         self.load_database_context()
-        self.log("[DB] Gmail account ID: " + str(self.gmail_account_id))
-        self.log("[DB] Source account ID: " + str(self.source_account_id))
-        self.log("[DB] Source ID: " + str(self.source_id))
 
-        all_labels = self.load_available_labels()
-        if not all_labels:
-            self.log("[STOP] No enabled Gmail labels.")
+        self.log(
+            "[DB] Gmail account ID: "
+            + str(
+                self.gmail_account_id
+            )
+        )
+
+        self.log(
+            "[DB] Source account ID: "
+            + str(
+                self.source_account_id
+            )
+        )
+
+        self.log(
+            "[DB] Source ID: "
+            + str(
+                self.source_id
+            )
+        )
+
+        self.label_rows = (
+            self.load_selected_labels()
+        )
+
+        if not self.label_rows:
+
+            self.log(
+                "[STOP] No selected Gmail labels."
+            )
+
             return self.stats
 
-        self.log("[DB] Enabled labels: " + str(len(all_labels)))
+        self.log(
+            "[DB] Selected labels: "
+            + str(
+                len(self.label_rows)
+            )
+        )
+
         self.connect_gmail()
 
-        # First phase: counts only. No message bodies, MIME, attachments or files are downloaded.
-        self.count_all_labels(all_labels)
-        selected = self.select_labels_for_copy(all_labels)
+        message_labels = (
+            self.collect_selected_messages()
+        )
 
-        if not selected:
-            self.log("[STOP] No labels selected.")
-            return self.stats
-
-        self.label_rows = selected
-        self.stats["labels"] = len(selected)
-
-        copy_started_at = self.utc_iso()
-
-        # Second phase: list message IDs only and deduplicate them across selected labels.
-        message_labels = self.collect_selected_messages()
-
-        self.log("")
-        self.log("=" * 72)
-        self.log("בדיקת הודעות ייחודיות לפני הורדת תוכן")
-        self.log("=" * 72)
-        self.log("מספר הודעות לפי Labels: " + str(self.stats["messages_found"]))
-        self.log("מספר הודעות ייחודיות: " + str(self.stats["unique_messages"]))
         self.log(
-            "כפילויות בין Labels: "
-            + str(self.stats["messages_found"] - self.stats["unique_messages"])
+            ""
         )
-        self.log("=" * 72)
 
-        # This is the safety gate. Nothing below this point fetches message bodies until YES is entered.
-        if not self.confirm_copy(selected, self.stats["unique_messages"]):
-            self.log("")
-            self.log("[STOP] COPY בוטל לפני הורדת הודעות.")
-            audit = self.create_audit_data(
-                selected,
-                "CANCELLED_BEFORE_MESSAGE_DOWNLOAD",
-                copy_started_at,
-                self.utc_iso(),
+        self.log(
+            "=" * 72
+        )
+
+        self.log(
+            "MESSAGE COLLECTION SUMMARY"
+        )
+
+        self.log(
+            "Labels: "
+            + str(
+                self.stats["labels"]
             )
-            if not self.dry_run:
-                self.save_audit_file(audit)
-            return self.stats
-
-        self.save_selected_labels_to_database(selected, all_labels)
-
-        self.log("")
-        self.log("[COPY] Starting message processing...")
-
-        for index, (message_id, labels) in enumerate(message_labels.items(), 1):
-            if index == 1 or index == len(message_labels) or index % 25 == 0:
-                self.log(
-                    "[PROGRESS] " + str(index) + "/" + str(len(message_labels))
-                )
-            try:
-                self.process_message(message_id, labels)
-            except Exception as exc:
-                self.stats["errors"] += 1
-                self.log(
-                    "[ERROR] " + message_id + ": "
-                    + type(exc).__name__ + ": " + str(exc)
-                )
-
-        copy_finished_at = self.utc_iso()
-        audit = self.create_audit_data(
-            selected,
-            "DRY_RUN_COMPLETED" if self.dry_run else "COPY_COMPLETED",
-            copy_started_at,
-            copy_finished_at,
         )
 
-        if not self.dry_run:
-            audit_path = self.save_audit_file(audit)
-            self.log("[AUDIT] " + str(audit_path))
+        self.log(
+            "Messages found across labels: "
+            + str(
+                self.stats[
+                    "messages_found"
+                ]
+            )
+        )
 
-        self.log("")
-        self.log("=" * 72)
-        self.log("FINAL SUMMARY")
-        self.log("=" * 72)
-        self.log("Labels: " + str(self.stats["labels"]))
-        self.log("Messages found: " + str(self.stats["messages_found"]))
-        self.log("Unique messages: " + str(self.stats["unique_messages"]))
-        self.log("New messages: " + str(self.stats["messages_new"]))
-        self.log("Existing messages: " + str(self.stats["messages_existing"]))
+        self.log(
+            "Unique messages: "
+            + str(
+                self.stats[
+                    "unique_messages"
+                ]
+            )
+        )
+
+        self.log(
+            "Messages in multiple selected labels: "
+            + str(
+                self.stats[
+                    "messages_with_multiple_labels"
+                ]
+            )
+        )
+
+        self.log(
+            "=" * 72
+        )
+
+        for index, (
+            message_id,
+            labels,
+        ) in enumerate(
+            message_labels.items(),
+            1,
+        ):
+
+            self.log(
+                ""
+            )
+
+            self.log(
+                "[PROGRESS] "
+                + str(index)
+                + "/"
+                + str(
+                    len(message_labels)
+                )
+            )
+
+            try:
+
+                self.process_message(
+                    message_id,
+                    labels,
+                )
+
+            except Exception as exc:
+
+                self.stats[
+                    "errors"
+                ] += 1
+
+                self.log(
+                    "[ERROR] "
+                    + message_id
+                    + ": "
+                    + type(exc).__name__
+                    + ": "
+                    + str(exc)
+                )
+
+        self.log(
+            ""
+        )
+
+        self.log(
+            "=" * 72
+        )
+
+        self.log(
+            "FINAL SUMMARY"
+        )
+
+        self.log(
+            "Labels: "
+            + str(
+                self.stats["labels"]
+            )
+        )
+
+        self.log(
+            "Messages found: "
+            + str(
+                self.stats[
+                    "messages_found"
+                ]
+            )
+        )
+
+        self.log(
+            "Unique messages: "
+            + str(
+                self.stats[
+                    "unique_messages"
+                ]
+            )
+        )
+
+        self.log(
+            "New messages: "
+            + str(
+                self.stats[
+                    "messages_new"
+                ]
+            )
+        )
+
+        self.log(
+            "Existing messages: "
+            + str(
+                self.stats[
+                    "messages_existing"
+                ]
+            )
+
+        )
+
         self.log(
             "Messages with multiple labels: "
-            + str(self.stats["messages_with_multiple_labels"])
+            + str(
+                self.stats[
+                    "messages_with_multiple_labels"
+                ]
+            )
         )
-        self.log("Attachments: " + str(self.stats["attachments"]))
-        self.log("New attachments: " + str(self.stats["attachments_new"]))
-        self.log("Existing attachments: " + str(self.stats["attachments_existing"]))
-        self.log("Errors: " + str(self.stats["errors"]))
-        self.log("Mode: " + ("DRY RUN" if self.dry_run else "REAL COPY"))
-        self.log("=" * 72)
+
+        self.log(
+            "Attachments: "
+            + str(
+                self.stats[
+                    "attachments"
+                ]
+            )
+        )
+
+        self.log(
+            "New attachments: "
+            + str(
+                self.stats[
+                    "attachments_new"
+                ]
+            )
+        )
+
+        self.log(
+            "Existing attachments: "
+            + str(
+                self.stats[
+                    "attachments_existing"
+                ]
+            )
+        )
+
+        self.log(
+            "Errors: "
+            + str(
+                self.stats[
+                    "errors"
+                ]
+            )
+        )
+
+        self.log(
+            "Mode: "
+            + (
+                "DRY RUN"
+                if self.dry_run
+                else "REAL COPY"
+            )
+        )
+
+        self.log(
+            "=" * 72
+        )
 
         return self.stats
 
