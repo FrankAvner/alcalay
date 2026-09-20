@@ -1,21 +1,25 @@
 # Python
-__pycache__/
+
+**pycache**/
 *.py[cod]
 *.pyo
 
 # Virtual environments
+
 .venv/
 venv/
 env/
 
 # Environment / secrets
+
 .env
 *.env
 !.env.example
 
 # Alcalay runtime data
+
 data/
-documents/
+/documents/
 backups/
 logs/
 search_index/
@@ -23,15 +27,18 @@ indexes/
 models/
 
 # Local configuration
+
 config/alcalay_config.json
 config/*.json
 
 # Databases
+
 *.db
 *.sqlite
 *.sqlite3
 
 # OAuth / credentials
+
 credentials/
 tokens/
 oauth/
@@ -39,14 +46,18 @@ client_secret*.json
 token*.json
 
 # OS files
+
 .DS_Store
 Thumbs.db
 
 # IDE
+
 .vscode/
 .idea/
 
 # Google Gmail OAuth credentials
+
 config/gmail/credentials.json
 config/gmail/token.json
 config/gmail/tokens/
+
