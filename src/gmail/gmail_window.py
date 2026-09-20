@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -44,10 +43,6 @@ from PySide6.QtWidgets import (
 from gmail.gmail_connection import GmailConnection
 from gmail.gmail_accounts import GmailAccountsManager
 
-
-# ======================================================================
-# Gmail Window
-# ======================================================================
 
 class GmailWindow(QMainWindow):
     """
@@ -72,10 +67,6 @@ class GmailWindow(QMainWindow):
             700,
         )
 
-        # --------------------------------------------------------------
-        # Data
-        # --------------------------------------------------------------
-
         self.accounts_manager = GmailAccountsManager()
 
         self.connection: Optional[GmailConnection] = None
@@ -83,10 +74,6 @@ class GmailWindow(QMainWindow):
         self.selected_email = ""
 
         self.available_labels = []
-
-        # --------------------------------------------------------------
-        # UI references
-        # --------------------------------------------------------------
 
         self.accounts_list = None
         self.linked_labels_list = None
@@ -100,17 +87,9 @@ class GmailWindow(QMainWindow):
         self.remove_label_button = None
         self.refresh_labels_button = None
 
-        # --------------------------------------------------------------
-        # Build
-        # --------------------------------------------------------------
-
         self._build_ui()
         self._apply_style()
         self._load_accounts()
-
-    # ==================================================================
-    # Style
-    # ==================================================================
 
     def _apply_style(self):
 
@@ -236,10 +215,6 @@ class GmailWindow(QMainWindow):
             }
         """)
 
-    # ==================================================================
-    # UI
-    # ==================================================================
-
     def _build_ui(self):
 
         central = QWidget()
@@ -262,10 +237,6 @@ class GmailWindow(QMainWindow):
         main_layout.setSpacing(
             18
         )
-
-        # ==============================================================
-        # Header
-        # ==============================================================
 
         header_layout = QHBoxLayout()
 
@@ -299,17 +270,9 @@ class GmailWindow(QMainWindow):
             header_layout
         )
 
-        # ==============================================================
-        # Main splitter
-        # ==============================================================
-
         splitter = QSplitter(
             Qt.Orientation.Horizontal
         )
-
-        # ==============================================================
-        # LEFT - Accounts
-        # ==============================================================
 
         accounts_frame = QFrame()
 
@@ -379,10 +342,6 @@ class GmailWindow(QMainWindow):
             1,
         )
 
-        # --------------------------------------------------------------
-        # Account buttons
-        # --------------------------------------------------------------
-
         account_buttons = QHBoxLayout()
 
         add_account_button = QPushButton(
@@ -429,10 +388,6 @@ class GmailWindow(QMainWindow):
             accounts_frame
         )
 
-        # ==============================================================
-        # RIGHT - Account and labels
-        # ==============================================================
-
         right_widget = QWidget()
 
         right_layout = QVBoxLayout(
@@ -449,10 +404,6 @@ class GmailWindow(QMainWindow):
         right_layout.setSpacing(
             15
         )
-
-        # ==============================================================
-        # Account information
-        # ==============================================================
 
         account_info_frame = QFrame()
 
@@ -523,10 +474,6 @@ class GmailWindow(QMainWindow):
             account_info_frame
         )
 
-        # ==============================================================
-        # Linked labels
-        # ==============================================================
-
         linked_frame = QFrame()
 
         linked_frame.setObjectName(
@@ -592,10 +539,6 @@ class GmailWindow(QMainWindow):
             1,
         )
 
-        # --------------------------------------------------------------
-        # Linked label buttons
-        # --------------------------------------------------------------
-
         linked_buttons = QHBoxLayout()
 
         self.refresh_labels_button = QPushButton(
@@ -652,10 +595,6 @@ class GmailWindow(QMainWindow):
             linked_frame,
             1,
         )
-
-        # ==============================================================
-        # Available labels
-        # ==============================================================
 
         available_frame = QFrame()
 
@@ -744,10 +683,6 @@ class GmailWindow(QMainWindow):
             1,
         )
 
-    # ==================================================================
-    # Accounts
-    # ==================================================================
-
     def _load_accounts(self):
 
         self.accounts_list.clear()
@@ -788,10 +723,6 @@ class GmailWindow(QMainWindow):
         else:
 
             self._clear_account_view()
-
-    # ------------------------------------------------------------------
-    # Account selected
-    # ------------------------------------------------------------------
 
     def _account_selected(
         self,
@@ -855,10 +786,6 @@ class GmailWindow(QMainWindow):
 
         self._load_available_labels()
 
-    # ------------------------------------------------------------------
-    # Clear account view
-    # ------------------------------------------------------------------
-
     def _clear_account_view(self):
 
         self.selected_email = ""
@@ -886,10 +813,6 @@ class GmailWindow(QMainWindow):
         self.refresh_labels_button.setEnabled(
             False
         )
-
-    # ==================================================================
-    # Add account
-    # ==================================================================
 
     def _add_account(self):
 
@@ -973,10 +896,6 @@ class GmailWindow(QMainWindow):
                 ),
             )
 
-    # ==================================================================
-    # Remove account
-    # ==================================================================
-
     def _remove_account(self):
 
         if not self.selected_email:
@@ -1032,10 +951,6 @@ class GmailWindow(QMainWindow):
                 "שגיאה",
                 f"לא ניתן להסיר את החשבון.\n\n{exc}",
             )
-
-    # ==================================================================
-    # Linked labels
-    # ==================================================================
 
     def _load_linked_labels(self):
 
@@ -1095,10 +1010,6 @@ class GmailWindow(QMainWindow):
             is not None
         )
 
-    # ------------------------------------------------------------------
-    # Linked label selected
-    # ------------------------------------------------------------------
-
     def _linked_label_selected(
         self,
         current,
@@ -1108,10 +1019,6 @@ class GmailWindow(QMainWindow):
         self.remove_label_button.setEnabled(
             current is not None
         )
-
-    # ==================================================================
-    # Available Gmail labels
-    # ==================================================================
 
     def _load_available_labels(self):
 
@@ -1287,10 +1194,6 @@ class GmailWindow(QMainWindow):
                 ),
             )
 
-    # ==================================================================
-    # Add label
-    # ==================================================================
-
     def _add_label_by_double_click(
         self,
         item,
@@ -1351,10 +1254,6 @@ class GmailWindow(QMainWindow):
                     f"{exc}"
                 ),
             )
-
-    # ==================================================================
-    # Remove label
-    # ==================================================================
 
     def _remove_label(self):
 
@@ -1419,10 +1318,6 @@ class GmailWindow(QMainWindow):
                     f"{exc}"
                 ),
             )
-
-    # ==================================================================
-    # Refresh labels from Gmail
-    # ==================================================================
 
     def _refresh_gmail_labels(
         self,
@@ -1511,11 +1406,6 @@ class GmailWindow(QMainWindow):
                         label_name=current_name,
                     )
 
-                self.accounts_manager.mark_fetch(
-                    self.selected_email,
-                    label_id,
-                )
-
             self._load_linked_labels()
 
             self._load_available_labels()
@@ -1552,10 +1442,6 @@ class GmailWindow(QMainWindow):
                 ),
             )
 
-    # ==================================================================
-    # Account display refresh
-    # ==================================================================
-
     def _refresh_account_display(self):
 
         if not self.selected_email:
@@ -1578,10 +1464,6 @@ class GmailWindow(QMainWindow):
             "מועד עדכון אחרון: "
             + self._format_datetime(updated)
         )
-
-    # ==================================================================
-    # Date formatting
-    # ==================================================================
 
     @staticmethod
     def _format_datetime(
@@ -1610,10 +1492,6 @@ class GmailWindow(QMainWindow):
 
             return str(value)
 
-    # ==================================================================
-    # Close
-    # ==================================================================
-
     def closeEvent(
         self,
         event,
@@ -1632,10 +1510,6 @@ class GmailWindow(QMainWindow):
 
         event.accept()
 
-
-# ======================================================================
-# Standalone test
-# ======================================================================
 
 def main():
 
