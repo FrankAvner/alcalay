@@ -23,10 +23,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from database.connection import DatabaseConnection
-from gmail.gmail_connection import GmailConnection
 from gmail.gmail_window import GmailWindow
-from search.search_window import SearchWindow
+from gmail.gmail_search_window import GmailSearchWindow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +52,7 @@ class GmailImportWindow(QDialog):
 
         self.setWindowTitle("Alcalay - ייבוא מיילים מ-Gmail")
         self.setWindowModality(Qt.NonModal)
-        self.resize(1100, 760)
+        self.resize(1100, 700)
 
         self.process = None
         self.process_finished = False
@@ -64,11 +62,6 @@ class GmailImportWindow(QDialog):
 
         self.last_handled_prompt = ""
         self.prompt_generation = 0
-
-        self.gmail_service = None
-        self.gmail_labels = []
-        self.gmail_counts_loaded = False
-        self.gmail_counting = False
 
         self._build_ui()
 
@@ -84,59 +77,6 @@ class GmailImportWindow(QDialog):
         self.status_label = QLabel("מוכן")
         self.status_label.setObjectName("statusLabel")
         layout.addWidget(self.status_label)
-
-        counts_frame = QFrame()
-        counts_frame.setObjectName("inputFrame")
-
-        counts_layout = QVBoxLayout(counts_frame)
-        counts_layout.setContentsMargins(12, 12, 12, 12)
-        counts_layout.setSpacing(8)
-
-        counts_title_row = QHBoxLayout()
-        counts_title_row.setSpacing(8)
-
-        counts_title = QLabel("מספר המיילים בכל תגית שנבחרה")
-        counts_title.setObjectName("inputLabel")
-        counts_title_row.addWidget(counts_title)
-
-        counts_title_row.addStretch()
-
-        self.refresh_counts_button = QPushButton(
-            "רענן ספירות"
-        )
-        self.refresh_counts_button.clicked.connect(
-            self.refresh_gmail_counts
-        )
-        counts_title_row.addWidget(
-            self.refresh_counts_button
-        )
-
-        counts_layout.addLayout(counts_title_row)
-
-        self.counts_output = QPlainTextEdit()
-        self.counts_output.setReadOnly(True)
-        self.counts_output.setLineWrapMode(
-            QPlainTextEdit.NoWrap
-        )
-        self.counts_output.setMaximumHeight(190)
-
-        counts_layout.addWidget(
-            self.counts_output
-        )
-
-        self.counts_status_label = QLabel(
-            "הספירות יוצגו כאן לפני התחלת ה-COPY."
-        )
-        self.counts_status_label.setObjectName(
-            "inputHint"
-        )
-        counts_layout.addWidget(
-            self.counts_status_label
-        )
-
-        layout.addWidget(
-            counts_frame
-        )
 
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
@@ -229,249 +169,15 @@ class GmailImportWindow(QDialog):
         self.input_edit.setEnabled(False)
         self.send_button.setEnabled(False)
 
-    def _get_database_account(self):
-        conn = DatabaseConnection().connect()
-
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id
-                    FROM gmail_accounts
-                    WHERE LOWER(email) = LOWER(%s)
-                    LIMIT 1
-                    """,
-                    (
-                        DEFAULT_GMAIL_ACCOUNT,
-                    ),
-                )
-
-                row = cursor.fetchone()
-
-                if not row:
-                    raise RuntimeError(
-                        "Gmail account was not found in PostgreSQL: "
-                        + DEFAULT_GMAIL_ACCOUNT
-                    )
-
-                return row[0]
-
-        finally:
-            conn.close()
-
-    def _load_selected_gmail_labels_for_counts(self):
-        gmail_account_id = self._get_database_account()
-
-        conn = DatabaseConnection().connect()
-
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT
-                        id,
-                        label_id,
-                        label_name
-                    FROM gmail_labels
-                    WHERE gmail_account_id = %s
-                      AND selected_for_sync = TRUE
-                      AND enabled = TRUE
-                    ORDER BY id
-                    """,
-                    (
-                        gmail_account_id,
-                    ),
-                )
-
-                rows = cursor.fetchall()
-
-                return [
-                    {
-                        "id": row[0],
-                        "label_id": row[1],
-                        "label_name": row[2],
-                    }
-                    for row in rows
-                ]
-
-        finally:
-            conn.close()
-
-    def _count_gmail_label_messages(
-        self,
-        service,
-        label_id,
-    ):
-        response = (
-            service.users()
-            .labels()
-            .get(
-                userId="me",
-                id=label_id,
-            )
-            .execute()
-        )
-
-        return int(
-            response.get(
-                "messagesTotal",
-                0,
-            )
-        )
-
-    def refresh_gmail_counts(self):
-        if self.gmail_counting:
-            return
-
-        if (
-            self.process is not None
-            and self.process.state()
-            != QProcess.ProcessState.NotRunning
-        ):
-            self.counts_status_label.setText(
-                "לא ניתן לרענן את הספירות בזמן ש-Gmail COPY פעיל."
-            )
-            return
-
-        self.gmail_counting = True
-        self.gmail_counts_loaded = False
-
-        self.refresh_counts_button.setEnabled(False)
-        self.counts_output.clear()
-
-        self.counts_status_label.setText(
-            "מתחבר ל-Gmail וקורא את מספר המיילים בכל תגית..."
-        )
-
-        QApplication.processEvents()
-
-        try:
-            labels = (
-                self._load_selected_gmail_labels_for_counts()
-            )
-
-            if not labels:
-                self.counts_output.setPlainText(
-                    "לא נמצאו תגיות שנבחרו ב'ניהול חשבונות Gmail'."
-                )
-
-                self.counts_status_label.setText(
-                    "אין תגיות פעילות שנבחרו לייבוא."
-                )
-
-                return
-
-            connection = GmailConnection(
-                DEFAULT_GMAIL_ACCOUNT
-            )
-
-            result = connection.connect(
-                DEFAULT_GMAIL_ACCOUNT
-            )
-
-            if result is False:
-                raise RuntimeError(
-                    "Gmail connection failed."
-                )
-
-            service = connection.service
-
-            if service is None:
-                raise RuntimeError(
-                    "Gmail service was not created."
-                )
-
-            self.gmail_service = service
-            self.gmail_labels = labels
-
-            lines = []
-
-            total_messages_across_labels = 0
-
-            for index, label in enumerate(
-                labels,
-                1,
-            ):
-                label_id = label["label_id"]
-                label_name = label["label_name"]
-
-                try:
-                    count = (
-                        self._count_gmail_label_messages(
-                            service,
-                            label_id,
-                        )
-                    )
-
-                    total_messages_across_labels += count
-
-                    lines.append(
-                        f"{index:3}. "
-                        f"{label_name}    "
-                        f"{count:,} מיילים"
-                    )
-
-                except Exception as exc:
-                    lines.append(
-                        f"{index:3}. "
-                        f"{label_name}    "
-                        f"[שגיאה: {exc}]"
-                    )
-
-            lines.append("")
-            lines.append(
-                "----------------------------------------"
-            )
-            lines.append(
-                "סה\"כ לפי תגיות: "
-                f"{total_messages_across_labels:,} מיילים"
-            )
-            lines.append(
-                "הסכום אינו בהכרח מספר מיילים ייחודיים, "
-                "מפני שמייל יכול להופיע ביותר מתגית אחת."
-            )
-
-            self.counts_output.setPlainText(
-                "\n".join(lines)
-            )
-
-            self.gmail_counts_loaded = True
-
-            self.counts_status_label.setText(
-                "הספירות התקבלו מ-Gmail. "
-                "אפשר עכשיו להתחיל את ה-COPY."
-            )
-
-            self.status_label.setText(
-                "מספרי המיילים בתגיות נטענו בהצלחה."
-            )
-
-        except Exception as exc:
-            self.gmail_counts_loaded = False
-
-            self.counts_output.setPlainText(
-                "לא ניתן היה לקבל את מספרי המיילים מ-Gmail.\n\n"
-                f"{type(exc).__name__}: {exc}"
-            )
-
-            self.counts_status_label.setText(
-                "שגיאה בקבלת ספירות Gmail."
-            )
-
-            QMessageBox.warning(
-                self,
-                "ספירת מיילים",
-                "לא ניתן היה לקבל את מספר המיילים "
-                "מהתגיות ב-Gmail.\n\n"
-                f"{type(exc).__name__}: {exc}\n\n"
-                "ניתן לנסות שוב באמצעות 'רענן ספירות'.",
-            )
-
-        finally:
-            self.gmail_counting = False
-            self.refresh_counts_button.setEnabled(True)
-
     def _get_latest_prompt(self):
+        """
+        Find ONLY the newest prompt in the output.
+
+        This is important because the complete output contains
+        the old label prompt even after the user already answered it.
+        We must not react to an old prompt again.
+        """
+
         text = self.output.toPlainText()
 
         if not text:
@@ -610,6 +316,15 @@ class GmailImportWindow(QDialog):
             )
 
     def _validate_label_selection(self, text):
+        """
+        Accept:
+            1
+            1,4,7
+            1-3,7
+            ALL
+            0
+        """
+
         value = text.strip()
 
         if not value:
@@ -621,10 +336,7 @@ class GmailImportWindow(QDialog):
         if value == "0":
             return True
 
-        pattern = (
-            r"^\d+(?:\s*-\s*\d+)?"
-            r"(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*$"
-        )
+        pattern = r"^\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*$"
 
         return re.fullmatch(
             pattern,
@@ -1634,7 +1346,7 @@ class GoogleLauncherPage(QWidget):
         self.gmail_window = None
         self.gmail_import_window = None
         self.gmail_index_window = None
-        self.search_window = None
+        self.gmail_search_window = None
 
         self._build_ui()
 
@@ -1691,10 +1403,10 @@ class GoogleLauncherPage(QWidget):
                 self.open_gmail_index,
             ),
             (
-                "חיפוש במאגרים",
+                "חיפוש במיילים",
                 "חיפוש במידע שנשמר "
-                "ונוסף לאינדקס מכלל המאגרים",
-                self.open_search,
+                "ונוסף לאינדקס",
+                self.open_gmail_search,
             ),
         ]
 
@@ -1786,8 +1498,6 @@ class GoogleLauncherPage(QWidget):
         self.gmail_import_window.raise_()
         self.gmail_import_window.activateWindow()
 
-        self.gmail_import_window.refresh_gmail_counts()
-
         if (
             self.gmail_import_window.process is None
             or self.gmail_import_window.process.state()
@@ -1805,13 +1515,13 @@ class GoogleLauncherPage(QWidget):
         self.gmail_index_window.raise_()
         self.gmail_index_window.activateWindow()
 
-    def open_search(self):
-        if self.search_window is None:
-            self.search_window = SearchWindow()
+    def open_gmail_search(self):
+        if self.gmail_search_window is None:
+            self.gmail_search_window = GmailSearchWindow()
 
-        self.search_window.show()
-        self.search_window.raise_()
-        self.search_window.activateWindow()
+        self.gmail_search_window.show()
+        self.gmail_search_window.raise_()
+        self.gmail_search_window.activateWindow()
 
 
 class PlaceholderPage(QWidget):

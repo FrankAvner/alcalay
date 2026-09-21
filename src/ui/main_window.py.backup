@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from database.connection import DatabaseConnection
 from gmail.gmail_connection import GmailConnection
 from gmail.gmail_window import GmailWindow
-from search.search_window import SearchWindow
+from gmail.gmail_search_window import GmailSearchWindow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1634,7 +1634,7 @@ class GoogleLauncherPage(QWidget):
         self.gmail_window = None
         self.gmail_import_window = None
         self.gmail_index_window = None
-        self.search_window = None
+        self.gmail_search_window = None
 
         self._build_ui()
 
@@ -1691,10 +1691,10 @@ class GoogleLauncherPage(QWidget):
                 self.open_gmail_index,
             ),
             (
-                "חיפוש במאגרים",
+                "חיפוש במיילים",
                 "חיפוש במידע שנשמר "
-                "ונוסף לאינדקס מכלל המאגרים",
-                self.open_search,
+                "ונוסף לאינדקס",
+                self.open_gmail_search,
             ),
         ]
 
@@ -1805,13 +1805,13 @@ class GoogleLauncherPage(QWidget):
         self.gmail_index_window.raise_()
         self.gmail_index_window.activateWindow()
 
-    def open_search(self):
-        if self.search_window is None:
-            self.search_window = SearchWindow()
+    def open_gmail_search(self):
+        if self.gmail_search_window is None:
+            self.gmail_search_window = GmailSearchWindow()
 
-        self.search_window.show()
-        self.search_window.raise_()
-        self.search_window.activateWindow()
+        self.gmail_search_window.show()
+        self.gmail_search_window.raise_()
+        self.gmail_search_window.activateWindow()
 
 
 class PlaceholderPage(QWidget):
