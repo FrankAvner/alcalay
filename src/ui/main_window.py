@@ -1,29 +1,26 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import (
-    Qt,
-    QProcess,
-    QProcessEnvironment,
-    QTimer,
-)
+from PySide6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QFrame,
+    QHBoxLayout,
     QLabel,
-    QMessageBox,
-    QPushButton,
+    QLineEdit,
     QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QWidget,
-    QFrame,
-    QPlainTextEdit,
-    QDialog,
-    QLineEdit,
 )
 
 from gmail.gmail_window import GmailWindow
@@ -35,1600 +32,723 @@ SRC_ROOT = PROJECT_ROOT / "src"
 
 DEFAULT_GMAIL_ACCOUNT = "frank.avner@gmail.com"
 
-
 MENU_ITEMS = [
     (1, "Google"),
     (2, "מסמכים"),
     (3, "חיפוש"),
-    (4, "ניהול משתמשים"),
-    (5, "הרשאות"),
-    (6, "מסד נתונים"),
-    (7, "הורדות"),
-    (8, "הגדרות"),
-    (9, "מערכת"),
+    (4, "משתמשים והרשאות"),
+    (5, "מסד נתונים"),
+    (6, "הורדה מקומית"),
+    (7, "OCR"),
+    (8, "AI / ML"),
+    (9, "אבטחה"),
     (10, "רענון והוספת מסמכים מהמייל"),
 ]
 
 
 class GmailImportWindow(QDialog):
-    """
-    GUI wrapper around gmail_copy.py.
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.parent_window = parent
+        self.setWindowTitle("Alcalay - ייבוא מיילים מ-Gmail")
+        self.setWindowModality(Qt.NonModal)
+        self.resize(1100, 700)
+
         self.process = None
         self.process_finished = False
-
-        self.output_buffer = ""
 
         self.awaiting_label_input = False
         self.awaiting_copy_confirmation = False
 
-        self.setWindowTitle(
-            "Alcalay - ייבוא מיילים"
+        self.last_handled_prompt = ""
+        self.prompt_generation = 0
+
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("ייבוא מיילים מ-Gmail")
+        title.setObjectName("windowTitle")
+        layout.addWidget(title)
+
+        self.status_label = QLabel("מוכן")
+        self.status_label.setObjectName("statusLabel")
+        layout.addWidget(self.status_label)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setLineWrapMode(QPlainTextEdit.NoWrap)
+        layout.addWidget(self.output, 1)
+
+        input_frame = QFrame()
+        input_frame.setObjectName("inputFrame")
+
+        input_layout = QVBoxLayout(input_frame)
+        input_layout.setContentsMargins(12, 12, 12, 12)
+        input_layout.setSpacing(8)
+
+        self.input_label = QLabel("קלט")
+        self.input_label.setObjectName("inputLabel")
+        input_layout.addWidget(self.input_label)
+
+        input_row = QHBoxLayout()
+        input_row.setSpacing(8)
+
+        self.input_edit = QLineEdit()
+        self.input_edit.setPlaceholderText(
+            "המתן ל-Gmail COPY..."
+        )
+        self.input_edit.returnPressed.connect(
+            self.send_input
+        )
+        input_row.addWidget(
+            self.input_edit,
+            1,
         )
 
-        self.setModal(False)
-        self.setWindowModality(Qt.NonModal)
-
-        self.resize(
-            1100,
-            700,
+        self.send_button = QPushButton("שלח")
+        self.send_button.clicked.connect(
+            self.send_input
+        )
+        input_row.addWidget(
+            self.send_button
         )
 
-        self.setMinimumSize(
-            850,
-            500,
+        input_layout.addLayout(input_row)
+
+        self.input_hint = QLabel(
+            "שדה הקלט יופעל כאשר Gmail COPY יבקש נתונים."
+        )
+        self.input_hint.setObjectName("inputHint")
+        input_layout.addWidget(self.input_hint)
+
+        layout.addWidget(input_frame)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+
+        self.close_button = QPushButton("סגור")
+        self.close_button.clicked.connect(
+            self.close
+        )
+        button_row.addWidget(
+            self.close_button
         )
 
-        self.setLayoutDirection(
-            Qt.RightToLeft
+        layout.addLayout(button_row)
+
+        self._disable_input_controls()
+
+    def _append_output(self, text):
+        if not text:
+            return
+
+        cursor = self.output.textCursor()
+        cursor.movePosition(
+            QTextCursor.MoveOperation.End
         )
 
-        self.script_path = (
+        self.output.setTextCursor(cursor)
+        self.output.insertPlainText(text)
+        self.output.ensureCursorVisible()
+
+    def _enable_text_input(self, label, hint):
+        self.input_label.setText(label)
+        self.input_hint.setText(hint)
+
+        self.input_edit.setEnabled(True)
+        self.send_button.setEnabled(True)
+
+        self.input_edit.setFocus()
+        self.input_edit.activateWindow()
+
+    def _disable_input_controls(self):
+        self.input_edit.setEnabled(False)
+        self.send_button.setEnabled(False)
+
+    def _get_latest_prompt(self):
+        """
+        Find ONLY the newest prompt in the output.
+
+        This is important because the complete output contains
+        the old label prompt even after the user already answered it.
+        We must not react to an old prompt again.
+        """
+
+        text = self.output.toPlainText()
+
+        if not text:
+            return None
+
+        lower_text = text.lower()
+
+        label_prompts = (
+            "labels להעתקה:",
+            "labels להעתקה",
+            "labels to copy:",
+            "labels to copy",
+            "label numbers:",
+            "label numbers",
+            "enter label numbers",
+            "select labels",
+            "selected labels",
+            "labels for copy",
+        )
+
+        confirmation_prompts = (
+            "להמשיך ל-copy?",
+            "להמשיך ל-copy",
+            "הקלד yes",
+            "yes לאישור",
+            "type yes to continue",
+            "yes to continue",
+            "continue? yes",
+            "continue? type yes",
+        )
+
+        candidates = []
+
+        for prompt in label_prompts:
+            position = lower_text.rfind(
+                prompt.lower()
+            )
+
+            if position >= 0:
+                candidates.append(
+                    (
+                        position,
+                        "labels",
+                        prompt,
+                    )
+                )
+
+        for prompt in confirmation_prompts:
+            position = lower_text.rfind(
+                prompt.lower()
+            )
+
+            if position >= 0:
+                candidates.append(
+                    (
+                        position,
+                        "confirmation",
+                        prompt,
+                    )
+                )
+
+        if not candidates:
+            return None
+
+        candidates.sort(
+            key=lambda item: item[0]
+        )
+
+        return candidates[-1]
+
+    def _check_for_input_prompt(self):
+        if self.process is None:
+            return
+
+        if (
+            self.process.state()
+            == QProcess.NotRunning
+        ):
+            return
+
+        latest_prompt = self._get_latest_prompt()
+
+        if latest_prompt is None:
+            return
+
+        position, prompt_type, prompt_text = latest_prompt
+
+        prompt_signature = (
+            f"{prompt_type}:{position}:{prompt_text}"
+        )
+
+        if (
+            prompt_signature
+            == self.last_handled_prompt
+        ):
+            return
+
+        if prompt_type == "labels":
+            if self.awaiting_label_input:
+                return
+
+            self.last_handled_prompt = prompt_signature
+            self.prompt_generation += 1
+
+            self.awaiting_label_input = True
+            self.awaiting_copy_confirmation = False
+
+            self._enable_text_input(
+                "מספרי התגיות להעתקה",
+                "לדוגמה: 1,4,7 או 1-3,7. לאחר מכן לחץ שלח.",
+            )
+
+            self.status_label.setText(
+                "ממתין לבחירת תגיות..."
+            )
+
+            return
+
+        if prompt_type == "confirmation":
+            if self.awaiting_copy_confirmation:
+                return
+
+            self.last_handled_prompt = prompt_signature
+            self.prompt_generation += 1
+
+            self.awaiting_label_input = False
+            self.awaiting_copy_confirmation = True
+
+            self._enable_text_input(
+                "אישור ביצוע הייבוא",
+                "הקלד YES כדי להמשיך או NO כדי לבטל.",
+            )
+
+            self.status_label.setText(
+                "ממתין לאישור YES..."
+            )
+
+    def _validate_label_selection(self, text):
+        """
+        Accept:
+            1
+            1,4,7
+            1-3,7
+            ALL
+            0
+        """
+
+        value = text.strip()
+
+        if not value:
+            return False
+
+        if value.upper() == "ALL":
+            return True
+
+        if value == "0":
+            return True
+
+        pattern = r"^\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+(?:\s*-\s*\d+)?)*$"
+
+        return re.fullmatch(
+            pattern,
+            value,
+        ) is not None
+
+    def send_input(self):
+        if self.process is None:
+            QMessageBox.warning(
+                self,
+                "Gmail COPY",
+                "תהליך Gmail COPY אינו פעיל.",
+            )
+            return
+
+        if (
+            self.process.state()
+            == QProcess.NotRunning
+        ):
+            QMessageBox.warning(
+                self,
+                "Gmail COPY",
+                "תהליך Gmail COPY אינו פעיל.",
+            )
+            return
+
+        text = self.input_edit.text().strip()
+
+        if not text:
+            return
+
+        if self.awaiting_label_input:
+            if not self._validate_label_selection(
+                text
+            ):
+                QMessageBox.warning(
+                    self,
+                    "קלט לא תקין",
+                    "יש להזין מספרי תגיות בצורה הבאה:\n\n"
+                    "1,4,7\n"
+                    "או\n"
+                    "1-3,7\n\n"
+                    "אפשר גם ALL או 0.",
+                )
+
+                self.input_edit.selectAll()
+                self.input_edit.setFocus()
+                return
+
+            self.send_text(text)
+
+            self.awaiting_label_input = False
+            self.awaiting_copy_confirmation = False
+
+            self.input_edit.clear()
+            self._disable_input_controls()
+
+            self.status_label.setText(
+                "בחירת התגיות נשלחה ל-Gmail COPY. "
+                "ממתין לשלב האישור..."
+            )
+
+            return
+
+        if self.awaiting_copy_confirmation:
+            answer = text.upper()
+
+            if answer not in (
+                "YES",
+                "NO",
+            ):
+                QMessageBox.warning(
+                    self,
+                    "קלט לא תקין",
+                    "יש להקליד YES או NO.",
+                )
+
+                self.input_edit.selectAll()
+                self.input_edit.setFocus()
+                return
+
+            self.send_text(answer)
+
+            self.awaiting_copy_confirmation = False
+            self.awaiting_label_input = False
+
+            self.input_edit.clear()
+            self._disable_input_controls()
+
+            if answer == "YES":
+                self.status_label.setText(
+                    "האישור YES נשלח. Gmail COPY מבצע את הייבוא..."
+                )
+            else:
+                self.status_label.setText(
+                    "הביטול NO נשלח ל-Gmail COPY."
+                )
+
+            return
+
+        QMessageBox.information(
+            self,
+            "Gmail COPY",
+            "כרגע Gmail COPY אינו מבקש קלט.",
+        )
+
+    def send_text(self, text):
+        if self.process is None:
+            return
+
+        if (
+            self.process.state()
+            == QProcess.NotRunning
+        ):
+            return
+
+        data = (
+            text + "\n"
+        ).encode(
+            "utf-8"
+        )
+
+        self.process.write(data)
+        self.process.waitForBytesWritten(
+            2000
+        )
+
+        self._append_output(
+            f"\n[GUI INPUT] {text}\n"
+        )
+
+    def _create_process_environment(self):
+        environment = (
+            QProcessEnvironment.systemEnvironment()
+        )
+
+        existing_pythonpath = (
+            environment.value(
+                "PYTHONPATH",
+                "",
+            )
+        )
+
+        paths = [
+            str(PROJECT_ROOT),
+            str(SRC_ROOT),
+        ]
+
+        if existing_pythonpath:
+            paths.append(
+                existing_pythonpath
+            )
+
+        environment.insert(
+            "PYTHONPATH",
+            os.pathsep.join(paths),
+        )
+
+        environment.insert(
+            "PYTHONUNBUFFERED",
+            "1",
+        )
+
+        return environment
+
+    def start(self):
+        script = (
             PROJECT_ROOT
             / "src"
             / "gmail"
             / "gmail_copy.py"
         )
 
-        self._build_ui()
-
-    def _build_ui(self):
-        main_layout = QVBoxLayout(self)
-
-        main_layout.setContentsMargins(
-            20,
-            20,
-            20,
-            20,
-        )
-
-        main_layout.setSpacing(12)
-
-        title = QLabel(
-            "ייבוא מיילים מ-Gmail"
-        )
-
-        title.setObjectName(
-            "gmailImportTitle"
-        )
-
-        title.setAlignment(
-            Qt.AlignRight
-        )
-
-        self.status_label = QLabel(
-            "מכין את ייבוא המיילים..."
-        )
-
-        self.status_label.setObjectName(
-            "gmailImportStatus"
-        )
-
-        self.status_label.setAlignment(
-            Qt.AlignRight
-        )
-
-        self.output = QPlainTextEdit()
-
-        self.output.setObjectName(
-            "gmailImportOutput"
-        )
-
-        self.output.setReadOnly(True)
-
-        self.output.setLineWrapMode(
-            QPlainTextEdit.NoWrap
-        )
-
-        self.output.setLayoutDirection(
-            Qt.LeftToRight
-        )
-
-        input_frame = QFrame()
-
-        input_frame.setObjectName(
-            "gmailImportInputFrame"
-        )
-
-        input_layout = QHBoxLayout(
-            input_frame
-        )
-
-        input_layout.setContentsMargins(
-            10,
-            8,
-            10,
-            8,
-        )
-
-        input_layout.setSpacing(8)
-
-        self.input_label = QLabel(
-            "קלט:"
-        )
-
-        self.input_label.setObjectName(
-            "gmailImportInputLabel"
-        )
-
-        self.input_edit = QLineEdit()
-
-        self.input_edit.setObjectName(
-            "gmailImportInput"
-        )
-
-        self.input_edit.setPlaceholderText(
-            "הקלד כאן..."
-        )
-
-        self.input_edit.setEnabled(False)
-
-        self.input_edit.returnPressed.connect(
-            self.send_input
-        )
-
-        self.send_button = QPushButton(
-            "שלח"
-        )
-
-        self.send_button.setObjectName(
-            "gmailImportSendButton"
-        )
-
-        self.send_button.setEnabled(False)
-
-        self.send_button.clicked.connect(
-            self.send_input
-        )
-
-        self.yes_button = QPushButton(
-            "YES"
-        )
-
-        self.yes_button.setObjectName(
-            "gmailImportYesButton"
-        )
-
-        self.yes_button.setEnabled(False)
-
-        self.yes_button.clicked.connect(
-            lambda: self.send_text("YES")
-        )
-
-        self.no_button = QPushButton(
-            "NO"
-        )
-
-        self.no_button.setObjectName(
-            "gmailImportNoButton"
-        )
-
-        self.no_button.setEnabled(False)
-
-        self.no_button.clicked.connect(
-            lambda: self.send_text("NO")
-        )
-
-        input_layout.addWidget(
-            self.input_label
-        )
-
-        input_layout.addWidget(
-            self.input_edit,
-            1,
-        )
-
-        input_layout.addWidget(
-            self.send_button
-        )
-
-        input_layout.addWidget(
-            self.yes_button
-        )
-
-        input_layout.addWidget(
-            self.no_button
-        )
-
-        self.close_button = QPushButton(
-            "סגור"
-        )
-
-        self.close_button.setObjectName(
-            "gmailImportCloseButton"
-        )
-
-        self.close_button.setMinimumHeight(
-            42
-        )
-
-        self.close_button.setEnabled(False)
-
-        self.close_button.clicked.connect(
-            self.close
-        )
-
-        buttons_layout = QHBoxLayout()
-
-        buttons_layout.addStretch()
-
-        buttons_layout.addWidget(
-            self.close_button
-        )
-
-        main_layout.addWidget(
-            title
-        )
-
-        main_layout.addWidget(
-            self.status_label
-        )
-
-        main_layout.addWidget(
-            self.output,
-            1,
-        )
-
-        main_layout.addWidget(
-            input_frame
-        )
-
-        main_layout.addLayout(
-            buttons_layout
-        )
-
-    def append_output(self, text):
-        if not text:
+        if not script.exists():
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                f"קובץ Gmail COPY לא נמצא:\n{script}",
+            )
             return
 
-        self.output_buffer += text
+        self.process_finished = False
 
-        cursor = self.output.textCursor()
+        self.awaiting_label_input = False
+        self.awaiting_copy_confirmation = False
 
-        cursor.movePosition(
-            cursor.MoveOperation.End
+        self.last_handled_prompt = ""
+        self.prompt_generation = 0
+
+        self.output.clear()
+        self.input_edit.clear()
+        self._disable_input_controls()
+
+        self.status_label.setText(
+            "מפעיל Gmail COPY..."
         )
 
-        self.output.setTextCursor(cursor)
-
-        self.output.insertPlainText(text)
-
-        cursor = self.output.textCursor()
-
-        cursor.movePosition(
-            cursor.MoveOperation.End
+        self.close_button.setEnabled(
+            False
         )
 
-        self.output.setTextCursor(cursor)
-
-        self.output.ensureCursorVisible()
-
-        self._check_for_input_prompt()
-
-    def append_line(self, text):
-        self.append_output(
-            text + "\n"
+        self.process = QProcess(
+            self
         )
 
-    def _check_for_input_prompt(self):
+        self.process.setProcessEnvironment(
+            self._create_process_environment()
+        )
+
+        self.process.setWorkingDirectory(
+            str(PROJECT_ROOT)
+        )
+
+        self.process.setProgram(
+            sys.executable
+        )
+
+        self.process.setArguments(
+            [
+                "-u",
+                str(script),
+            ]
+        )
+
+        self.process.readyReadStandardOutput.connect(
+            self._read_stdout
+        )
+
+        self.process.readyReadStandardError.connect(
+            self._read_stderr
+        )
+
+        self.process.errorOccurred.connect(
+            self._process_error
+        )
+
+        self.process.finished.connect(
+            self._process_finished
+        )
+
+        self.process.start()
+
+        if not self.process.waitForStarted(
+            5000
+        ):
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                "לא ניתן להפעיל את Gmail COPY.",
+            )
+
+            self.close_button.setEnabled(
+                True
+            )
+
+    def _read_stdout(self):
         if self.process is None:
             return
 
-        if self.process.state() == QProcess.NotRunning:
-            return
-
-        if (
-            not self.awaiting_label_input
-            and "Labels to copy:" in self.output_buffer
-        ):
-            self.awaiting_label_input = True
-            self.awaiting_copy_confirmation = False
-
-            self._enable_text_input(
-                "הקלד את מספרי ה-Labels, לדוגמה: 1,4,7 או 1-3,7"
-            )
-
-            self.status_label.setText(
-                "ממתין לבחירת ה-Labels לייבוא"
-            )
-
-            return
-
-        if (
-            not self.awaiting_copy_confirmation
-            and "להמשיך ל-COPY? הקלד YES לאישור:" in self.output_buffer
-        ):
-            self.awaiting_label_input = False
-            self.awaiting_copy_confirmation = True
-
-            self._enable_confirmation_buttons()
-
-            self.status_label.setText(
-                "נדרש אישור לפני הורדת תוכן המיילים"
-            )
-
-    def _enable_text_input(self, placeholder):
-        self.input_edit.setEnabled(True)
-
-        self.input_edit.setPlaceholderText(
-            placeholder
+        data = bytes(
+            self.process.readAllStandardOutput()
         )
 
-        self.send_button.setEnabled(True)
-
-        self.yes_button.setEnabled(False)
-        self.no_button.setEnabled(False)
-
-        self.input_edit.setFocus()
-
-    def _enable_confirmation_buttons(self):
-        self.input_edit.setEnabled(False)
-
-        self.send_button.setEnabled(False)
-
-        self.yes_button.setEnabled(True)
-        self.no_button.setEnabled(True)
-
-        self.input_edit.clear()
-
-    def _disable_input_controls(self):
-        self.input_edit.setEnabled(False)
-        self.send_button.setEnabled(False)
-        self.yes_button.setEnabled(False)
-        self.no_button.setEnabled(False)
-
-    def send_input(self):
-        value = self.input_edit.text().strip()
-
-        if not value:
+        if not data:
             return
 
-        self.send_text(value)
+        text = data.decode(
+            "utf-8",
+            errors="replace",
+        )
 
-    def send_text(self, value):
+        self._append_output(
+            text
+        )
+
+        QTimer.singleShot(
+            0,
+            self._check_for_input_prompt,
+        )
+
+    def _read_stderr(self):
         if self.process is None:
             return
 
-        if self.process.state() == QProcess.NotRunning:
-            return
-
-        text = str(value).strip()
-
-        if not text:
-            return
-
-        self.append_line("")
-        self.append_line(
-            f"[GUI INPUT] {text}"
+        data = bytes(
+            self.process.readAllStandardError()
         )
 
-        self.process.write(
-            (
-                text + "\n"
-            ).encode("utf-8")
+        if not data:
+            return
+
+        text = data.decode(
+            "utf-8",
+            errors="replace",
         )
 
-        self.input_edit.clear()
+        self._append_output(
+            text
+        )
+
+        QTimer.singleShot(
+            0,
+            self._check_for_input_prompt,
+        )
+
+    def _process_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            message = (
+                "לא ניתן להפעיל את Gmail COPY."
+            )
+        else:
+            message = (
+                f"שגיאת QProcess: {error}"
+            )
+
+        self.status_label.setText(
+            message
+        )
+
+        self._append_output(
+            "\n[ERROR] "
+            + message
+            + "\n"
+        )
+
+        self.close_button.setEnabled(
+            True
+        )
+
+    def _process_finished(
+        self,
+        exit_code,
+        exit_status,
+    ):
+        self.process_finished = True
 
         self.awaiting_label_input = False
         self.awaiting_copy_confirmation = False
 
         self._disable_input_controls()
 
-        if text.upper() == "YES":
+        if (
+            exit_code == 0
+            and exit_status
+            == QProcess.ExitStatus.NormalExit
+        ):
             self.status_label.setText(
-                "אישור התקבל — מתחיל COPY..."
+                "Gmail COPY הסתיים בהצלחה."
             )
-
-        elif text.upper() == "NO":
-            self.status_label.setText(
-                "COPY בוטל..."
-            )
-
         else:
             self.status_label.setText(
-                "בחירת ה-Labels נשלחה ל-gmail_copy.py..."
+                "Gmail COPY הסתיים עם שגיאה. "
+                f"קוד: {exit_code}"
             )
 
-    def _create_process_environment(self, env):
-        process_environment = (
-            QProcessEnvironment.systemEnvironment()
+        self.close_button.setEnabled(
+            True
         )
-
-        for key, value in env.items():
-            process_environment.insert(
-                key,
-                value,
-            )
-
-        return process_environment
-
-    def start(self):
-        if not self.script_path.exists():
-            self.status_label.setText(
-                "שגיאה: קובץ הייבוא לא נמצא"
-            )
-
-            self.append_line(
-                "ERROR: Gmail COPY script was not found:"
-            )
-
-            self.append_line(
-                str(self.script_path)
-            )
-
-            self.close_button.setEnabled(True)
-
-            return
-
-        env = os.environ.copy()
-
-        existing_pythonpath = env.get(
-            "PYTHONPATH",
-            "",
-        )
-
-        python_paths = [
-            str(SRC_ROOT),
-            str(PROJECT_ROOT),
-        ]
-
-        if existing_pythonpath:
-            python_paths.append(
-                existing_pythonpath
-            )
-
-        env["PYTHONPATH"] = (
-            os.pathsep.join(python_paths)
-        )
-
-        env["PYTHONUNBUFFERED"] = "1"
-
-        self.append_line(
-            "========================================================================"
-        )
-
-        self.append_line(
-            "ALCALAY - GMAIL COPY"
-        )
-
-        self.append_line(
-            "========================================================================"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            f"[PROCESS] Python: {sys.executable}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Script: {self.script_path}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Working directory: {PROJECT_ROOT}"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            "[PROCESS] Starting gmail_copy.py..."
-        )
-
-        self.append_line("")
-
-        self.status_label.setText(
-            "שלב 2: ייבוא מיילים מתבצע..."
-        )
-
-        self.process = QProcess(self)
-
-        self.process.setWorkingDirectory(
-            str(PROJECT_ROOT)
-        )
-
-        self.process.setProcessEnvironment(
-            self._create_process_environment(env)
-        )
-
-        self.process.setProgram(
-            sys.executable
-        )
-
-        self.process.setArguments(
-            [
-                "-u",
-                str(self.script_path),
-            ]
-        )
-
-        self.process.readyReadStandardOutput.connect(
-            self._read_stdout
-        )
-
-        self.process.readyReadStandardError.connect(
-            self._read_stderr
-        )
-
-        self.process.finished.connect(
-            self._process_finished
-        )
-
-        self.process.errorOccurred.connect(
-            self._process_error
-        )
-
-        self.process.start()
-
-        if not self.process.waitForStarted(5000):
-            self.append_line("")
-            self.append_line(
-                "[ERROR] Could not start gmail_copy.py."
-            )
-
-            self.status_label.setText(
-                "שגיאה בהפעלת ייבוא Gmail"
-            )
-
-            self.close_button.setEnabled(True)
-
-    def _read_stdout(self):
-        if self.process is None:
-            return
-
-        data = (
-            self.process.readAllStandardOutput()
-        )
-
-        if not data:
-            return
-
-        text = bytes(data).decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        self.append_output(text)
-
-    def _read_stderr(self):
-        if self.process is None:
-            return
-
-        data = (
-            self.process.readAllStandardError()
-        )
-
-        if not data:
-            return
-
-        text = bytes(data).decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        self.append_output(text)
-
-    def _process_error(self, error):
-        self.append_line("")
-        self.append_line(
-            "[PROCESS ERROR] "
-            + str(error)
-        )
-
-        self.status_label.setText(
-            "שגיאה בתהליך ייבוא Gmail"
-        )
-
-    def _process_finished(
-        self,
-        exit_code,
-        exit_status,
-    ):
-        self._read_stdout()
-        self._read_stderr()
-
-        self.process_finished = True
-
-        self._disable_input_controls()
-
-        self.append_line("")
-        self.append_line(
-            "========================================================================"
-        )
-
-        if exit_code == 0:
-            self.append_line(
-                "[PROCESS] Gmail COPY completed successfully."
-            )
-
-            self.status_label.setText(
-                "ייבוא המיילים הסתיים בהצלחה"
-            )
-
-        else:
-            self.append_line(
-                "[PROCESS] Gmail COPY finished "
-                f"with exit code {exit_code}."
-            )
-
-            self.status_label.setText(
-                "ייבוא המיילים הסתיים עם שגיאה"
-            )
-
-        self.append_line(
-            "========================================================================"
-        )
-
-        self.close_button.setEnabled(True)
-
-        if self.parent_window is not None:
-            if exit_code == 0:
-                self.parent_window.statusBar().showMessage(
-                    "שלב 2: ייבוא מיילים הסתיים בהצלחה"
-                )
-            else:
-                self.parent_window.statusBar().showMessage(
-                    "שלב 2: ייבוא מיילים הסתיים עם שגיאה"
-                )
 
     def closeEvent(self, event):
-        if (
-            self.process is not None
-            and self.process.state()
-            != QProcess.NotRunning
-        ):
-            answer = QMessageBox.question(
-                self,
-                "ייבוא עדיין מתבצע",
-                "ייבוא המיילים עדיין מתבצע.\n\n"
-                "האם לסגור את החלון ולהפסיק את התהליך?",
-                QMessageBox.Yes
-                | QMessageBox.No,
-                QMessageBox.No,
-            )
+        if self.process is not None:
+            if (
+                self.process.state()
+                != QProcess.ProcessState.NotRunning
+            ):
+                self.process.terminate()
 
-            if answer != QMessageBox.Yes:
-                event.ignore()
-                return
-
-            self.process.kill()
-
-            self.process.waitForFinished(2000)
+                if not self.process.waitForFinished(
+                    1500
+                ):
+                    self.process.kill()
+                    self.process.waitForFinished(
+                        1000
+                    )
 
         event.accept()
 
 
 class GmailIndexWindow(QDialog):
-    """
-    Combined Gmail INDEX workflow.
-
-    When INDEX is selected:
-
-        1. gmail_parser.py
-        2. gmail_indexer.py
-        3. automatic window close
-
-    The parser is started with the configured/default Gmail account.
-    """
-
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.parent_window = parent
+        self.setWindowTitle(
+            "Alcalay - אינדוקס מיילים"
+        )
+        self.setWindowModality(Qt.NonModal)
+        self.resize(1000, 650)
 
-        self.process = None
+        self.parser_process = None
+        self.indexer_process = None
+        self.stopping = False
 
-        self.current_stage = None
+        self.account = DEFAULT_GMAIL_ACCOUNT
 
-        self.stop_requested = False
-        self.process_finished = False
-
-        self.parse_script_path = (
+        self.parser_script = (
             PROJECT_ROOT
             / "src"
             / "gmail"
             / "gmail_parser.py"
         )
 
-        self.index_script_path = (
+        self.indexer_script = (
             PROJECT_ROOT
             / "src"
             / "gmail"
             / "gmail_indexer.py"
         )
 
-        self.account_email = (
-            DEFAULT_GMAIL_ACCOUNT
-        )
-
-        self.setWindowTitle(
-            "Alcalay - Gmail INDEX"
-        )
-
-        self.setModal(False)
-        self.setWindowModality(Qt.NonModal)
-
-        # Intentionally smaller than the old 1100x700 window.
-        self.resize(
-            900,
-            520,
-        )
-
-        self.setMinimumSize(
-            700,
-            400,
-        )
-
-        self.setLayoutDirection(
-            Qt.RightToLeft
-        )
-
         self._build_ui()
 
     def _build_ui(self):
-        main_layout = QVBoxLayout(self)
-
-        main_layout.setContentsMargins(
-            15,
-            15,
-            15,
-            15,
-        )
-
-        main_layout.setSpacing(8)
-
-        self.title = QLabel(
-            "Gmail INDEX"
-        )
-
-        self.title.setObjectName(
-            "gmailIndexTitle"
-        )
-
-        self.title.setAlignment(
-            Qt.AlignRight
-        )
-
-        self.status_label = QLabel(
-            "מכין את תהליך האינדוקס..."
-        )
-
-        self.status_label.setObjectName(
-            "gmailIndexStatus"
-        )
-
-        self.status_label.setAlignment(
-            Qt.AlignRight
-        )
-
-        self.output = QPlainTextEdit()
-
-        self.output.setObjectName(
-            "gmailIndexOutput"
-        )
-
-        self.output.setReadOnly(True)
-
-        self.output.setLineWrapMode(
-            QPlainTextEdit.NoWrap
-        )
-
-        self.output.setLayoutDirection(
-            Qt.LeftToRight
-        )
-
-        buttons_layout = QHBoxLayout()
-
-        self.stop_button = QPushButton(
-            "עצור"
-        )
-
-        self.stop_button.setObjectName(
-            "gmailIndexStopButton"
-        )
-
-        self.stop_button.setMinimumHeight(36)
-
-        self.stop_button.clicked.connect(
-            self.stop_process
-        )
-
-        self.close_button = QPushButton(
-            "סגור"
-        )
-
-        self.close_button.setObjectName(
-            "gmailIndexCloseButton"
-        )
-
-        self.close_button.setMinimumHeight(36)
-
-        self.close_button.setEnabled(False)
-
-        self.close_button.clicked.connect(
-            self.close
-        )
-
-        buttons_layout.addWidget(
-            self.stop_button
-        )
-
-        buttons_layout.addStretch()
-
-        buttons_layout.addWidget(
-            self.close_button
-        )
-
-        main_layout.addWidget(
-            self.title
-        )
-
-        main_layout.addWidget(
-            self.status_label
-        )
-
-        main_layout.addWidget(
-            self.output,
-            1,
-        )
-
-        main_layout.addLayout(
-            buttons_layout
-        )
-
-    def append_output(self, text):
-        if not text:
-            return
-
-        cursor = self.output.textCursor()
-
-        cursor.movePosition(
-            cursor.MoveOperation.End
-        )
-
-        self.output.setTextCursor(cursor)
-
-        self.output.insertPlainText(text)
-
-        cursor = self.output.textCursor()
-
-        cursor.movePosition(
-            cursor.MoveOperation.End
-        )
-
-        self.output.setTextCursor(cursor)
-
-        self.output.ensureCursorVisible()
-
-    def append_line(self, text):
-        self.append_output(
-            text + "\n"
-        )
-
-    def _create_process_environment(self, env):
-        process_environment = (
-            QProcessEnvironment.systemEnvironment()
-        )
-
-        for key, value in env.items():
-            process_environment.insert(
-                key,
-                value,
-            )
-
-        return process_environment
-
-    def _build_environment(self):
-        env = os.environ.copy()
-
-        existing_pythonpath = env.get(
-            "PYTHONPATH",
-            "",
-        )
-
-        python_paths = [
-            str(SRC_ROOT),
-            str(PROJECT_ROOT),
-        ]
-
-        if existing_pythonpath:
-            python_paths.append(
-                existing_pythonpath
-            )
-
-        env["PYTHONPATH"] = (
-            os.pathsep.join(python_paths)
-        )
-
-        env["PYTHONUNBUFFERED"] = "1"
-
-        return env
-
-    def start(self):
-        if not self.parse_script_path.exists():
-            self._show_error(
-                "קובץ ה-PARSER לא נמצא",
-                self.parse_script_path,
-            )
-            return
-
-        if not self.index_script_path.exists():
-            self._show_error(
-                "קובץ ה-INDEXER לא נמצא",
-                self.index_script_path,
-            )
-            return
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line(
-            "ALCALAY - GMAIL INDEX"
-        )
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            f"[PROCESS] Python: {sys.executable}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Gmail account: {self.account_email}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Working directory: {PROJECT_ROOT}"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            "[WORKFLOW] INDEX started."
-        )
-
-        self.append_line(
-            "[WORKFLOW] First: PARSE"
-        )
-
-        self.append_line(
-            "[WORKFLOW] Second: INDEX"
-        )
-
-        self.append_line("")
-
-        self.start_parser()
-
-    def start_parser(self):
-        self.current_stage = "PARSE"
-
-        self.title.setText(
-            "Gmail INDEX — שלב 1 מתוך 2: PARSE"
-        )
-
-        self.status_label.setText(
-            "מפרש את המיילים שעדיין לא נותחו..."
-        )
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line(
-            "ALCALAY - GMAIL PARSE"
-        )
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            f"[PROCESS] Python: {sys.executable}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Script: {self.parse_script_path}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Working directory: {PROJECT_ROOT}"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            "[PROCESS] Starting gmail_parser.py..."
-        )
-
-        self.append_line(
-            f"[PROCESS] Account: {self.account_email}"
-        )
-
-        self.append_line("")
-
-        env = self._build_environment()
-
-        self.process = QProcess(self)
-
-        self.process.setWorkingDirectory(
-            str(PROJECT_ROOT)
-        )
-
-        self.process.setProcessEnvironment(
-            self._create_process_environment(env)
-        )
-
-        self.process.setProgram(
-            sys.executable
-        )
-
-        # IMPORTANT:
-        # gmail_parser.py requires --account.
-        #
-        # This was the source of the previous:
-        #
-        # gmail_parser.py: error:
-        # the following arguments are required: --account
-        #
-        # Therefore --account is explicitly passed here.
-        self.process.setArguments(
-            [
-                "-u",
-                str(self.parse_script_path),
-                "--account",
-                self.account_email,
-            ]
-        )
-
-        self.process.readyReadStandardOutput.connect(
-            self._read_stdout
-        )
-
-        self.process.readyReadStandardError.connect(
-            self._read_stderr
-        )
-
-        self.process.finished.connect(
-            self._process_finished
-        )
-
-        self.process.errorOccurred.connect(
-            self._process_error
-        )
-
-        self.process.start()
-
-        if not self.process.waitForStarted(5000):
-            self.append_line("")
-            self.append_line(
-                "[ERROR] Could not start gmail_parser.py."
-            )
-
-            self.status_label.setText(
-                "שגיאה בהפעלת PARSE"
-            )
-
-            self.stop_button.setEnabled(False)
-            self.close_button.setEnabled(True)
-
-    def start_indexer(self):
-        self.current_stage = "INDEX"
-
-        self.title.setText(
-            "Gmail INDEX — שלב 2 מתוך 2: INDEX"
-        )
-
-        self.status_label.setText(
-            "מאנדקס את המיילים שנותחו..."
-        )
-
-        self.append_line("")
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line(
-            "ALCALAY - GMAIL INDEXER"
-        )
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            f"[PROCESS] Python: {sys.executable}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Script: {self.index_script_path}"
-        )
-
-        self.append_line(
-            f"[PROCESS] Working directory: {PROJECT_ROOT}"
-        )
-
-        self.append_line("")
-
-        self.append_line(
-            "[PROCESS] Starting gmail_indexer.py..."
-        )
-
-        self.append_line("")
-
-        env = self._build_environment()
-
-        self.process = QProcess(self)
-
-        self.process.setWorkingDirectory(
-            str(PROJECT_ROOT)
-        )
-
-        self.process.setProcessEnvironment(
-            self._create_process_environment(env)
-        )
-
-        self.process.setProgram(
-            sys.executable
-        )
-
-        self.process.setArguments(
-            [
-                "-u",
-                str(self.index_script_path),
-            ]
-        )
-
-        self.process.readyReadStandardOutput.connect(
-            self._read_stdout
-        )
-
-        self.process.readyReadStandardError.connect(
-            self._read_stderr
-        )
-
-        self.process.finished.connect(
-            self._process_finished
-        )
-
-        self.process.errorOccurred.connect(
-            self._process_error
-        )
-
-        self.process.start()
-
-        if not self.process.waitForStarted(5000):
-            self.append_line("")
-            self.append_line(
-                "[ERROR] Could not start gmail_indexer.py."
-            )
-
-            self.status_label.setText(
-                "שגיאה בהפעלת INDEX"
-            )
-
-            self.stop_button.setEnabled(False)
-            self.close_button.setEnabled(True)
-
-    def _read_stdout(self):
-        if self.process is None:
-            return
-
-        data = (
-            self.process.readAllStandardOutput()
-        )
-
-        if not data:
-            return
-
-        text = bytes(data).decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        self.append_output(text)
-
-    def _read_stderr(self):
-        if self.process is None:
-            return
-
-        data = (
-            self.process.readAllStandardError()
-        )
-
-        if not data:
-            return
-
-        text = bytes(data).decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        self.append_output(text)
-
-    def _process_error(self, error):
-        self.append_line("")
-        self.append_line(
-            "[PROCESS ERROR] "
-            + str(error)
-        )
-
-        if self.current_stage == "PARSE":
-            self.status_label.setText(
-                "שגיאה בתהליך PARSE"
-            )
-        else:
-            self.status_label.setText(
-                "שגיאה בתהליך INDEX"
-            )
-
-    def _process_finished(
-        self,
-        exit_code,
-        exit_status,
-    ):
-        self._read_stdout()
-        self._read_stderr()
-
-        stage = self.current_stage
-
-        self.process_finished = True
-
-        self.append_line("")
-        self.append_line(
-            "============================================================"
-        )
-
-        if self.stop_requested:
-            self.append_line(
-                f"[PROCESS] Gmail {stage} stopped by user."
-            )
-
-            self.status_label.setText(
-                f"{stage} הופסק על ידי המשתמש"
-            )
-
-            self.stop_button.setEnabled(False)
-            self.close_button.setEnabled(True)
-
-            if self.parent_window is not None:
-                self.parent_window.statusBar().showMessage(
-                    f"Gmail {stage} הופסק"
-                )
-
-            return
-
-        if exit_code != 0:
-            self.append_line(
-                f"[PROCESS] Gmail {stage} finished "
-                f"with exit code {exit_code}."
-            )
-
-            self.status_label.setText(
-                f"{stage} הסתיים עם שגיאה"
-            )
-
-            self.stop_button.setEnabled(False)
-            self.close_button.setEnabled(True)
-
-            if self.parent_window is not None:
-                self.parent_window.statusBar().showMessage(
-                    f"Gmail {stage} הסתיים עם שגיאה"
-                )
-
-            self.append_line(
-                "============================================================"
-            )
-
-            return
-
-        if stage == "PARSE":
-            self.append_line(
-                "[PROCESS] Gmail PARSE completed successfully."
-            )
-
-            self.append_line(
-                "[WORKFLOW] PARSE completed."
-            )
-
-            self.append_line(
-                "[WORKFLOW] Starting INDEX automatically..."
-            )
-
-            self.append_line(
-                "============================================================"
-            )
-
-            self.status_label.setText(
-                "PARSE הסתיים בהצלחה — עובר אוטומטית ל-INDEX..."
-            )
-
-            self.process.deleteLater()
-            self.process = None
-
-            QTimer.singleShot(
-                250,
-                self.start_indexer,
-            )
-
-            return
-
-        self.append_line(
-            "[PROCESS] Gmail INDEX completed successfully."
-        )
-
-        self.append_line(
-            "[WORKFLOW] PARSE + INDEX completed successfully."
-        )
-
-        self.append_line(
-            "============================================================"
-        )
-
-        self.status_label.setText(
-            "PARSE ו-INDEX הסתיימו בהצלחה"
-        )
-
-        self.stop_button.setEnabled(False)
-
-        if self.parent_window is not None:
-            self.parent_window.statusBar().showMessage(
-                "Gmail PARSE ו-INDEX הסתיימו בהצלחה"
-            )
-
-        # Automatic close after successful INDEX.
-        QTimer.singleShot(
-            1200,
-            self._close_successfully,
-        )
-
-    def _close_successfully(self):
-        self.accept()
-
-    def _show_error(self, title, path):
-        self.append_line("")
-        self.append_line(
-            f"[ERROR] {title}:"
-        )
-        self.append_line(
-            str(path)
-        )
-
-        self.status_label.setText(
-            title
-        )
-
-        self.stop_button.setEnabled(False)
-        self.close_button.setEnabled(True)
-
-    def stop_process(self):
-        if self.process is None:
-            return
-
-        if self.process.state() == QProcess.NotRunning:
-            return
-
-        answer = QMessageBox.question(
-            self,
-            "עצירת תהליך",
-            "תהליך Gmail עדיין מתבצע.\n\n"
-            "האם אתה בטוח שברצונך לעצור אותו?",
-            QMessageBox.Yes
-            | QMessageBox.No,
-            QMessageBox.No,
-        )
-
-        if answer != QMessageBox.Yes:
-            return
-
-        self.stop_requested = True
-
-        self.status_label.setText(
-            "עוצר את התהליך..."
-        )
-
-        self.append_line("")
-        self.append_line(
-            "[USER] Stop requested."
-        )
-
-        self.stop_button.setEnabled(False)
-
-        self.process.terminate()
-
-        if not self.process.waitForFinished(2000):
-            self.append_line(
-                "[PROCESS] Normal termination timed out."
-            )
-
-            self.append_line(
-                "[PROCESS] Killing process..."
-            )
-
-            self.process.kill()
-
-            self.process.waitForFinished(2000)
-
-    def closeEvent(self, event):
-        if (
-            self.process is not None
-            and self.process.state()
-            != QProcess.NotRunning
-        ):
-            answer = QMessageBox.question(
-                self,
-                "תהליך עדיין מתבצע",
-                "תהליך Gmail עדיין מתבצע.\n\n"
-                "האם לסגור את החלון ולהפסיק את התהליך?",
-                QMessageBox.Yes
-                | QMessageBox.No,
-                QMessageBox.No,
-            )
-
-            if answer != QMessageBox.Yes:
-                event.ignore()
-                return
-
-            self.stop_requested = True
-
-            self.process.terminate()
-
-            if not self.process.waitForFinished(2000):
-                self.process.kill()
-
-                self.process.waitForFinished(2000)
-
-        event.accept()
-
-
-class GoogleLauncherPage(QWidget):
-    def __init__(self, main_window):
-        super().__init__()
-
-        self.main_window = main_window
-
-        self.setLayoutDirection(
-            Qt.RightToLeft
-        )
-
         layout = QVBoxLayout(self)
-
-        layout.setContentsMargins(
-            30,
-            30,
-            30,
-            30,
-        )
-
-        layout.setSpacing(20)
-
-        title = QLabel(
-            "Google / Gmail"
-        )
-
-        title.setObjectName(
-            "pageTitle"
-        )
-
-        title.setAlignment(
-            Qt.AlignRight
-        )
-
-        subtitle = QLabel(
-            "עבודה עם Gmail בשלושה שלבים: "
-            "בחירת חשבון ותגיות → ייבוא → PARSE + INDEX"
-        )
-
-        subtitle.setObjectName(
-            "pageSubtitle"
-        )
-
-        subtitle.setAlignment(
-            Qt.AlignRight
-        )
-
-        subtitle.setWordWrap(True)
-
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-
-        cards_layout = QHBoxLayout()
-
-        cards_layout.setSpacing(20)
-
-        cards_layout.addWidget(
-            self.create_card(
-                "1. חשבונות ותגיות",
-                "הצגת חשבונות Gmail הקיימים במערכת, "
-                "בחירת חשבון והצגת ובחירת התגיות שלו.",
-                "חשבונות ותגיות",
-                self.main_window.open_gmail_window,
-            )
-        )
-
-        cards_layout.addWidget(
-            self.create_card(
-                "2. ייבוא מיילים",
-                "ייבוא המיילים מהחשבון והתגיות שנבחרו "
-                "לאחסון המקומי של Alcalay.",
-                "ייבוא מיילים",
-                self.main_window.open_gmail_import,
-            )
-        )
-
-        cards_layout.addWidget(
-            self.create_card(
-                "3. אינדוקס מיילים",
-                "בעת בחירת אינדוקס המערכת מבצעת קודם "
-                "PARSE לכל המיילים שעדיין לא נותחו, "
-                "ולאחר מכן INDEX. החלון נסגר אוטומטית "
-                "בסיום מוצלח.",
-                "אינדוקס מיילים",
-                self.main_window.open_gmail_indexer,
-            )
-        )
-
-        cards_layout.addWidget(
-            self.create_card(
-                "חיפוש במיילים",
-                "חיפוש במידע שנאסף מהמיילים "
-                "באמצעות מנגנון החיפוש של Alcalay.",
-                "חיפוש במיילים",
-                self.main_window.open_gmail_search,
-            )
-        )
-
-        layout.addLayout(cards_layout)
-        layout.addStretch()
-
-    def create_card(
-        self,
-        title_text,
-        description_text,
-        button_text,
-        callback,
-    ):
-        card = QFrame()
-
-        card.setObjectName("card")
-
-        card.setMinimumWidth(250)
-        card.setMaximumWidth(360)
-
-        layout = QVBoxLayout(card)
 
         layout.setContentsMargins(
             20,
@@ -1639,99 +759,807 @@ class GoogleLauncherPage(QWidget):
 
         layout.setSpacing(12)
 
-        title = QLabel(title_text)
+        title = QLabel(
+            "אינדוקס מיילים מ-Gmail"
+        )
 
         title.setObjectName(
-            "cardTitle"
+            "windowTitle"
         )
-
-        title.setAlignment(
-            Qt.AlignRight
-        )
-
-        title.setWordWrap(True)
-
-        description = QLabel(
-            description_text
-        )
-
-        description.setObjectName(
-            "cardDescription"
-        )
-
-        description.setAlignment(
-            Qt.AlignRight
-        )
-
-        description.setWordWrap(True)
-
-        button = QPushButton(
-            button_text
-        )
-
-        button.setObjectName(
-            "primaryButton"
-        )
-
-        button.clicked.connect(callback)
 
         layout.addWidget(title)
-        layout.addWidget(description)
-        layout.addStretch()
-        layout.addWidget(button)
 
-        return card
-
-
-class PlaceholderPage(QWidget):
-    def __init__(
-        self,
-        title_text,
-        description_text,
-    ):
-        super().__init__()
-
-        self.setLayoutDirection(
-            Qt.RightToLeft
+        self.status_label = QLabel(
+            "מוכן"
         )
 
+        self.status_label.setObjectName(
+            "statusLabel"
+        )
+
+        layout.addWidget(
+            self.status_label
+        )
+
+        self.output = QPlainTextEdit()
+
+        self.output.setReadOnly(True)
+
+        self.output.setLineWrapMode(
+            QPlainTextEdit.NoWrap
+        )
+
+        layout.addWidget(
+            self.output,
+            1,
+        )
+
+        button_row = QHBoxLayout()
+
+        self.start_button = QPushButton(
+            "התחל אינדוקס"
+        )
+
+        self.start_button.clicked.connect(
+            self.start
+        )
+
+        button_row.addWidget(
+            self.start_button
+        )
+
+        self.stop_button = QPushButton(
+            "עצור"
+        )
+
+        self.stop_button.clicked.connect(
+            self.stop
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        button_row.addWidget(
+            self.stop_button
+        )
+
+        button_row.addStretch()
+
+        self.close_button = QPushButton(
+            "סגור"
+        )
+
+        self.close_button.clicked.connect(
+            self.close
+        )
+
+        button_row.addWidget(
+            self.close_button
+        )
+
+        layout.addLayout(
+            button_row
+        )
+
+    def _append_output(self, text):
+        if not text:
+            return
+
+        cursor = self.output.textCursor()
+
+        cursor.movePosition(
+            QTextCursor.MoveOperation.End
+        )
+
+        self.output.setTextCursor(
+            cursor
+        )
+
+        self.output.insertPlainText(
+            text
+        )
+
+        self.output.ensureCursorVisible()
+
+    def _create_process_environment(self):
+        environment = (
+            QProcessEnvironment.systemEnvironment()
+        )
+
+        existing_pythonpath = (
+            environment.value(
+                "PYTHONPATH",
+                "",
+            )
+        )
+
+        paths = [
+            str(PROJECT_ROOT),
+            str(SRC_ROOT),
+        ]
+
+        if existing_pythonpath:
+            paths.append(
+                existing_pythonpath
+            )
+
+        environment.insert(
+            "PYTHONPATH",
+            os.pathsep.join(paths),
+        )
+
+        environment.insert(
+            "PYTHONUNBUFFERED",
+            "1",
+        )
+
+        return environment
+
+    def start(self):
+        if (
+            self.parser_process is not None
+            and self.parser_process.state()
+            != QProcess.ProcessState.NotRunning
+        ):
+            return
+
+        if (
+            self.indexer_process is not None
+            and self.indexer_process.state()
+            != QProcess.ProcessState.NotRunning
+        ):
+            return
+
+        if not self.parser_script.exists():
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                "קובץ Gmail Parser לא נמצא:\n"
+                f"{self.parser_script}",
+            )
+            return
+
+        if not self.indexer_script.exists():
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                "קובץ Gmail Indexer לא נמצא:\n"
+                f"{self.indexer_script}",
+            )
+            return
+
+        self.stopping = False
+
+        self.output.clear()
+
+        self.start_button.setEnabled(
+            False
+        )
+
+        self.stop_button.setEnabled(
+            True
+        )
+
+        self.close_button.setEnabled(
+            False
+        )
+
+        self.status_label.setText(
+            "שלב 1/2: מבצע PARSE למיילים..."
+        )
+
+        self.start_parser()
+
+    def start_parser(self):
+        self.parser_process = QProcess(
+            self
+        )
+
+        self.parser_process.setProcessEnvironment(
+            self._create_process_environment()
+        )
+
+        self.parser_process.setWorkingDirectory(
+            str(PROJECT_ROOT)
+        )
+
+        self.parser_process.setProgram(
+            sys.executable
+        )
+
+        self.parser_process.setArguments(
+            [
+                "-u",
+                str(self.parser_script),
+                "--account",
+                self.account,
+            ]
+        )
+
+        self.parser_process.readyReadStandardOutput.connect(
+            self._read_parser_stdout
+        )
+
+        self.parser_process.readyReadStandardError.connect(
+            self._read_parser_stderr
+        )
+
+        self.parser_process.errorOccurred.connect(
+            self._parser_error
+        )
+
+        self.parser_process.finished.connect(
+            self._parser_finished
+        )
+
+        self.parser_process.start()
+
+        if not self.parser_process.waitForStarted(
+            5000
+        ):
+            self._parser_error(
+                QProcess.ProcessError.FailedToStart
+            )
+
+    def _read_parser_stdout(self):
+        if self.parser_process is None:
+            return
+
+        data = bytes(
+            self.parser_process.readAllStandardOutput()
+        )
+
+        if not data:
+            return
+
+        self._append_output(
+            data.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    def _read_parser_stderr(self):
+        if self.parser_process is None:
+            return
+
+        data = bytes(
+            self.parser_process.readAllStandardError()
+        )
+
+        if not data:
+            return
+
+        self._append_output(
+            data.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    def _parser_error(self, error):
+        if self.stopping:
+            return
+
+        self.status_label.setText(
+            f"שגיאת Gmail Parser: {error}"
+        )
+
+        QMessageBox.critical(
+            self,
+            "שגיאה",
+            "לא ניתן להפעיל את Gmail Parser.\n\n"
+            f"שגיאה: {error}",
+        )
+
+        self.start_button.setEnabled(
+            True
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        self.close_button.setEnabled(
+            True
+        )
+
+    def _parser_finished(
+        self,
+        exit_code,
+        exit_status,
+    ):
+        if self.stopping:
+            return
+
+        if (
+            exit_status != QProcess.ExitStatus.NormalExit
+            or exit_code != 0
+        ):
+            self.status_label.setText(
+                "Gmail Parser נכשל. "
+                f"קוד: {exit_code}"
+            )
+
+            self.start_button.setEnabled(
+                True
+            )
+
+            self.stop_button.setEnabled(
+                False
+            )
+
+            self.close_button.setEnabled(
+                True
+            )
+
+            return
+
+        self.status_label.setText(
+            "שלב 2/2: מבצע INDEX..."
+        )
+
+        self._append_output(
+            "\n"
+            "========================================\n"
+            "PARSER FINISHED SUCCESSFULLY\n"
+            "STARTING INDEXER\n"
+            "========================================\n\n"
+        )
+
+        QTimer.singleShot(
+            250,
+            self.start_indexer,
+        )
+
+    def start_indexer(self):
+        if self.stopping:
+            return
+
+        self.indexer_process = QProcess(
+            self
+        )
+
+        self.indexer_process.setProcessEnvironment(
+            self._create_process_environment()
+        )
+
+        self.indexer_process.setWorkingDirectory(
+            str(PROJECT_ROOT)
+        )
+
+        self.indexer_process.setProgram(
+            sys.executable
+        )
+
+        self.indexer_process.setArguments(
+            [
+                "-u",
+                str(self.indexer_script),
+            ]
+        )
+
+        self.indexer_process.readyReadStandardOutput.connect(
+            self._read_indexer_stdout
+        )
+
+        self.indexer_process.readyReadStandardError.connect(
+            self._read_indexer_stderr
+        )
+
+        self.indexer_process.errorOccurred.connect(
+            self._indexer_error
+        )
+
+        self.indexer_process.finished.connect(
+            self._indexer_finished
+        )
+
+        self.indexer_process.start()
+
+        if not self.indexer_process.waitForStarted(
+            5000
+        ):
+            self._indexer_error(
+                QProcess.ProcessError.FailedToStart
+            )
+
+    def _read_indexer_stdout(self):
+        if self.indexer_process is None:
+            return
+
+        data = bytes(
+            self.indexer_process.readAllStandardOutput()
+        )
+
+        if not data:
+            return
+
+        self._append_output(
+            data.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    def _read_indexer_stderr(self):
+        if self.indexer_process is None:
+            return
+
+        data = bytes(
+            self.indexer_process.readAllStandardError()
+        )
+
+        if not data:
+            return
+
+        self._append_output(
+            data.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    def _indexer_error(self, error):
+        if self.stopping:
+            return
+
+        self.status_label.setText(
+            f"שגיאת Gmail Indexer: {error}"
+        )
+
+        QMessageBox.critical(
+            self,
+            "שגיאה",
+            "לא ניתן להפעיל את האינדקס של Google.\n\n"
+            f"שגיאת QProcess: {error}",
+        )
+
+        self.start_button.setEnabled(
+            True
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        self.close_button.setEnabled(
+            True
+        )
+
+    def _indexer_finished(
+        self,
+        exit_code,
+        exit_status,
+    ):
+        if self.stopping:
+            return
+
+        if (
+            exit_status != QProcess.ExitStatus.NormalExit
+            or exit_code != 0
+        ):
+            self.status_label.setText(
+                "Gmail Indexer נכשל. "
+                f"קוד: {exit_code}"
+            )
+
+            self._append_output(
+                "\n"
+                "========================================\n"
+                f"INDEXER FAILED - EXIT CODE {exit_code}\n"
+                "========================================\n"
+            )
+
+            self.start_button.setEnabled(
+                True
+            )
+
+            self.stop_button.setEnabled(
+                False
+            )
+
+            self.close_button.setEnabled(
+                True
+            )
+
+            return
+
+        self.status_label.setText(
+            "PARSE + INDEX הסתיימו בהצלחה."
+        )
+
+        self._append_output(
+            "\n"
+            "========================================\n"
+            "PARSE + INDEX COMPLETED SUCCESSFULLY\n"
+            "========================================\n"
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        self.close_button.setEnabled(
+            True
+        )
+
+    def stop(self):
+        self.stopping = True
+
+        if self.parser_process is not None:
+            if (
+                self.parser_process.state()
+                != QProcess.ProcessState.NotRunning
+            ):
+                self.parser_process.terminate()
+
+                if not self.parser_process.waitForFinished(
+                    1500
+                ):
+                    self.parser_process.kill()
+                    self.parser_process.waitForFinished(
+                        1000
+                    )
+
+        if self.indexer_process is not None:
+            if (
+                self.indexer_process.state()
+                != QProcess.ProcessState.NotRunning
+            ):
+                self.indexer_process.terminate()
+
+                if not self.indexer_process.waitForFinished(
+                    1500
+                ):
+                    self.indexer_process.kill()
+                    self.indexer_process.waitForFinished(
+                        1000
+                    )
+
+        self.status_label.setText(
+            "האינדוקס נעצר."
+        )
+
+        self.start_button.setEnabled(
+            True
+        )
+
+        self.stop_button.setEnabled(
+            False
+        )
+
+        self.close_button.setEnabled(
+            True
+        )
+
+    def closeEvent(self, event):
+        self.stop()
+        event.accept()
+
+
+class GoogleLauncherPage(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.gmail_window = None
+        self.gmail_import_window = None
+        self.gmail_index_window = None
+        self.gmail_search_window = None
+
+        self._build_ui()
+
+    def _build_ui(self):
         layout = QVBoxLayout(self)
 
         layout.setContentsMargins(
-            40,
-            40,
-            40,
-            40,
+            30,
+            30,
+            30,
+            30,
         )
 
-        layout.setSpacing(15)
+        layout.setSpacing(18)
 
-        title = QLabel(title_text)
+        title = QLabel(
+            "Google / Gmail"
+        )
 
         title.setObjectName(
             "pageTitle"
         )
 
-        title.setAlignment(
-            Qt.AlignRight
+        layout.addWidget(title)
+
+        subtitle = QLabel(
+            "ניהול חשבונות Gmail, "
+            "ייבוא מיילים, אינדוקס וחיפוש"
         )
 
-        description = QLabel(
-            description_text
-        )
-
-        description.setObjectName(
+        subtitle.setObjectName(
             "pageSubtitle"
         )
 
-        description.setAlignment(
-            Qt.AlignRight
+        layout.addWidget(subtitle)
+
+        cards = [
+            (
+                "חשבונות ותגיות",
+                "ניהול חשבונות Gmail "
+                "ותגיות שנבחרו לסנכרון",
+                self.open_gmail_window,
+            ),
+            (
+                "ייבוא מיילים",
+                "COPY של מיילים "
+                "מהתגיות שנבחרו בלבד",
+                self.open_gmail_import,
+            ),
+            (
+                "אינדוקס מיילים",
+                "PARSE ולאחר מכן INDEX "
+                "של המיילים שהועתקו",
+                self.open_gmail_index,
+            ),
+            (
+                "חיפוש במיילים",
+                "חיפוש במידע שנשמר "
+                "ונוסף לאינדקס",
+                self.open_gmail_search,
+            ),
+        ]
+
+        for (
+            title_text,
+            description,
+            callback,
+        ) in cards:
+
+            frame = QFrame()
+            frame.setObjectName(
+                "card"
+            )
+
+            frame_layout = QVBoxLayout(
+                frame
+            )
+
+            frame_layout.setContentsMargins(
+                18,
+                18,
+                18,
+                18,
+            )
+
+            frame_layout.setSpacing(8)
+
+            card_title = QLabel(
+                title_text
+            )
+
+            card_title.setObjectName(
+                "cardTitle"
+            )
+
+            frame_layout.addWidget(
+                card_title
+            )
+
+            card_description = QLabel(
+                description
+            )
+
+            card_description.setObjectName(
+                "cardDescription"
+            )
+
+            card_description.setWordWrap(
+                True
+            )
+
+            frame_layout.addWidget(
+                card_description
+            )
+
+            button = QPushButton(
+                "פתח"
+            )
+
+            button.clicked.connect(
+                callback
+            )
+
+            frame_layout.addWidget(
+                button
+            )
+
+            layout.addWidget(
+                frame
+            )
+
+        layout.addStretch()
+
+    def open_gmail_window(self):
+        if self.gmail_window is None:
+            self.gmail_window = GmailWindow()
+
+        self.gmail_window.show()
+        self.gmail_window.raise_()
+        self.gmail_window.activateWindow()
+
+    def open_gmail_import(self):
+        if self.gmail_import_window is None:
+            self.gmail_import_window = GmailImportWindow(
+                self
+            )
+
+        self.gmail_import_window.show()
+        self.gmail_import_window.raise_()
+        self.gmail_import_window.activateWindow()
+
+        if (
+            self.gmail_import_window.process is None
+            or self.gmail_import_window.process.state()
+            == QProcess.ProcessState.NotRunning
+        ):
+            self.gmail_import_window.start()
+
+    def open_gmail_index(self):
+        if self.gmail_index_window is None:
+            self.gmail_index_window = GmailIndexWindow(
+                self
+            )
+
+        self.gmail_index_window.show()
+        self.gmail_index_window.raise_()
+        self.gmail_index_window.activateWindow()
+
+    def open_gmail_search(self):
+        if self.gmail_search_window is None:
+            self.gmail_search_window = GmailSearchWindow()
+
+        self.gmail_search_window.show()
+        self.gmail_search_window.raise_()
+        self.gmail_search_window.activateWindow()
+
+
+class PlaceholderPage(QWidget):
+    def __init__(
+        self,
+        title,
+        parent=None,
+    ):
+        super().__init__(parent)
+
+        layout = QVBoxLayout(self)
+
+        layout.setContentsMargins(
+            30,
+            30,
+            30,
+            30,
         )
 
-        description.setWordWrap(True)
+        label = QLabel(title)
+        label.setObjectName(
+            "pageTitle"
+        )
 
-        layout.addWidget(title)
-        layout.addWidget(description)
+        layout.addWidget(label)
+
+        message = QLabel(
+            "מודול זה יוגדר בשלב הבא."
+        )
+
+        message.setObjectName(
+            "pageSubtitle"
+        )
+
+        layout.addWidget(
+            message
+        )
+
         layout.addStretch()
 
 
@@ -1749,663 +1577,291 @@ class MainWindow(QMainWindow):
         )
 
         self.setLayoutDirection(
-            Qt.RightToLeft
+            Qt.LayoutDirection.RightToLeft
         )
 
         self.stack = QStackedWidget()
 
         self.pages = {}
 
-        self.google_page = GoogleLauncherPage(
-            self
+        self._build_pages()
+
+        self.setCentralWidget(
+            self._build_central_widget()
         )
 
-        self.pages[1] = self.google_page
+    def _build_pages(self):
+        self.pages[1] = GoogleLauncherPage()
 
-        self.pages[2] = PlaceholderPage(
-            "מסמכים",
-            "ניהול מסמכים ומקורות מידע.",
-        )
+        for number, title in MENU_ITEMS:
+            if number == 1:
+                continue
 
-        self.pages[3] = PlaceholderPage(
-            "חיפוש",
-            "חיפוש במסמכים ובמידע המאונדקס.",
-        )
+            self.pages[number] = PlaceholderPage(
+                title
+            )
 
-        self.pages[4] = PlaceholderPage(
-            "ניהול משתמשים",
-            "ניהול משתמשים במערכת.",
-        )
+        for number in range(1, 11):
+            self.stack.addWidget(
+                self.pages[number]
+            )
 
-        self.pages[5] = PlaceholderPage(
-            "הרשאות",
-            "ניהול הרשאות וגישה למידע.",
-        )
-
-        self.pages[6] = PlaceholderPage(
-            "מסד נתונים",
-            "חיבור וניהול מסדי הנתונים.",
-        )
-
-        self.pages[7] = PlaceholderPage(
-            "הורדות",
-            "ניהול הורדות ואחסון מקומי.",
-        )
-
-        self.pages[8] = PlaceholderPage(
-            "הגדרות",
-            "הגדרות המערכת.",
-        )
-
-        self.pages[9] = PlaceholderPage(
-            "מערכת",
-            "כלי מערכת ותחזוקה.",
-        )
-
-        self.pages[10] = PlaceholderPage(
-            "רענון והוספת מסמכים מהמייל",
-            "תהליך העבודה עם Gmail: "
-            "בחירת חשבון ותגיות → ייבוא → PARSE → INDEX.",
-        )
-
-        for page in self.pages.values():
-            self.stack.addWidget(page)
-
-        self.menu_buttons = {}
-
+    def _build_central_widget(self):
         central = QWidget()
 
-        central_layout = QHBoxLayout(
+        main_layout = QHBoxLayout(
             central
         )
 
-        central_layout.setContentsMargins(
+        main_layout.setContentsMargins(
             0,
             0,
             0,
             0,
         )
 
-        central_layout.setSpacing(0)
+        main_layout.setSpacing(0)
 
-        menu = self.create_menu()
-
-        central_layout.addWidget(
-            self.stack,
-            1,
-        )
-
-        central_layout.addWidget(
-            menu
-        )
-
-        self.setCentralWidget(central)
-
-        self.statusBar().showMessage(
-            "Alcalay מוכן"
-        )
-
-        self.show_page(1)
-
-    def create_menu(self):
-        menu = QFrame()
-
-        menu.setObjectName(
+        menu_frame = QFrame()
+        menu_frame.setObjectName(
             "sideMenu"
         )
 
-        menu.setFixedWidth(260)
+        menu_frame.setFixedWidth(
+            310
+        )
 
-        layout = QVBoxLayout(menu)
+        menu_layout = QVBoxLayout(
+            menu_frame
+        )
 
-        layout.setContentsMargins(
+        menu_layout.setContentsMargins(
             15,
             20,
             15,
             20,
         )
 
-        layout.setSpacing(8)
+        menu_layout.setSpacing(8)
 
-        title = QLabel("ALCALAY")
-
-        title.setObjectName(
-            "menuTitle"
+        logo = QLabel(
+            "ALCALAY"
         )
 
-        title.setAlignment(
-            Qt.AlignCenter
+        logo.setObjectName(
+            "logo"
         )
 
-        layout.addWidget(title)
+        logo.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
 
-        layout.addSpacing(15)
+        menu_layout.addWidget(
+            logo
+        )
 
-        for number, text in MENU_ITEMS:
+        separator = QFrame()
+
+        separator.setFrameShape(
+            QFrame.Shape.HLine
+        )
+
+        separator.setObjectName(
+            "separator"
+        )
+
+        menu_layout.addWidget(
+            separator
+        )
+
+        for number, title in MENU_ITEMS:
             button = QPushButton(
-                f"{number}. {text}"
+                f"{number}. {title}"
             )
 
             button.setObjectName(
                 "menuButton"
             )
 
-            button.setMinimumHeight(45)
+            button.setMinimumHeight(
+                48
+            )
 
             button.clicked.connect(
                 lambda checked=False,
-                page_number=number:
-                self.show_page(page_number)
+                n=number:
+                self.show_page(n)
             )
 
-            self.menu_buttons[number] = button
+            menu_layout.addWidget(
+                button
+            )
 
-            layout.addWidget(button)
+        menu_layout.addStretch()
 
-        layout.addStretch()
+        version = QLabel(
+            "Alcalay"
+        )
 
-        return menu
+        version.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
 
-    def show_page(self, page_number):
-        if page_number not in self.pages:
+        version.setObjectName(
+            "versionLabel"
+        )
+
+        menu_layout.addWidget(
+            version
+        )
+
+        main_layout.addWidget(
+            menu_frame
+        )
+
+        main_layout.addWidget(
+            self.stack,
+            1,
+        )
+
+        return central
+
+    def show_page(self, number):
+        if number not in self.pages:
             return
 
-        page = self.pages[page_number]
-
-        self.stack.setCurrentWidget(page)
-
-        for number, button in self.menu_buttons.items():
-            button.setProperty(
-                "selected",
-                number == page_number,
-            )
-
-            button.style().unpolish(button)
-            button.style().polish(button)
-
-        self.statusBar().showMessage(
-            MENU_ITEMS[page_number - 1][1]
+        self.stack.setCurrentWidget(
+            self.pages[number]
         )
-
-    def open_gmail_window(self):
-        try:
-            self.gmail_window = GmailWindow(self)
-
-            self.gmail_window.setWindowModality(
-                Qt.ApplicationModal
-            )
-
-            self.gmail_window.show()
-
-            self.gmail_window.raise_()
-            self.gmail_window.activateWindow()
-
-            self.statusBar().showMessage(
-                "שלב 1: חשבונות Gmail ותגיות"
-            )
-
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "שגיאה",
-                f"לא ניתן לפתוח את ניהול Gmail:\n\n{exc}",
-            )
-
-    def open_gmail_search(self):
-        try:
-            self.gmail_search_window = (
-                GmailSearchWindow(self)
-            )
-
-            self.gmail_search_window.setWindowModality(
-                Qt.ApplicationModal
-            )
-
-            self.gmail_search_window.show()
-
-            self.gmail_search_window.raise_()
-            self.gmail_search_window.activateWindow()
-
-            self.statusBar().showMessage(
-                "חיפוש במיילים"
-            )
-
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "שגיאה",
-                f"לא ניתן לפתוח את חיפוש Gmail:\n\n{exc}",
-            )
-
-    def _get_subprocess_environment(self):
-        env = os.environ.copy()
-
-        existing_pythonpath = env.get(
-            "PYTHONPATH",
-            "",
-        )
-
-        python_paths = [
-            str(SRC_ROOT),
-            str(PROJECT_ROOT),
-        ]
-
-        if existing_pythonpath:
-            python_paths.append(
-                existing_pythonpath
-            )
-
-        env["PYTHONPATH"] = (
-            os.pathsep.join(python_paths)
-        )
-
-        env["PYTHONUNBUFFERED"] = "1"
-
-        return env
-
-    def open_gmail_import(self):
-        script_path = (
-            PROJECT_ROOT
-            / "src"
-            / "gmail"
-            / "gmail_copy.py"
-        )
-
-        if not script_path.exists():
-            QMessageBox.critical(
-                self,
-                "קובץ חסר",
-                f"קובץ הייבוא לא נמצא:\n\n{script_path}",
-            )
-
-            return
-
-        answer = QMessageBox.question(
-            self,
-            "ייבוא מיילים",
-            "להפעיל את שלב 2 - ייבוא המיילים "
-            "לפי חשבון ותגיות Gmail שהוגדרו?",
-            QMessageBox.Yes
-            | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-
-        if answer != QMessageBox.Yes:
-            return
-
-        try:
-            self.gmail_import_window = (
-                GmailImportWindow(self)
-            )
-
-            self.gmail_import_window.setModal(False)
-
-            self.gmail_import_window.setWindowModality(
-                Qt.NonModal
-            )
-
-            self.gmail_import_window.show()
-
-            self.gmail_import_window.raise_()
-            self.gmail_import_window.activateWindow()
-
-            self.statusBar().showMessage(
-                "שלב 2: ייבוא מיילים מתבצע"
-            )
-
-            self.gmail_import_window.start()
-
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "שגיאה",
-                f"לא ניתן להפעיל את ייבוא Gmail:\n\n{exc}",
-            )
-
-    def open_gmail_indexer(self):
-        """
-        Start the complete Gmail INDEX workflow.
-
-        The workflow is:
-
-            PARSE
-              ↓
-            INDEX
-              ↓
-            automatic window close
-
-        The parser receives --account explicitly.
-        """
-
-        parse_script_path = (
-            PROJECT_ROOT
-            / "src"
-            / "gmail"
-            / "gmail_parser.py"
-        )
-
-        index_script_path = (
-            PROJECT_ROOT
-            / "src"
-            / "gmail"
-            / "gmail_indexer.py"
-        )
-
-        if not parse_script_path.exists():
-            QMessageBox.critical(
-                self,
-                "קובץ חסר",
-                f"קובץ ה-PARSE לא נמצא:\n\n"
-                f"{parse_script_path}",
-            )
-
-            return
-
-        if not index_script_path.exists():
-            QMessageBox.critical(
-                self,
-                "קובץ חסר",
-                f"קובץ ה-INDEX לא נמצא:\n\n"
-                f"{index_script_path}",
-            )
-
-            return
-
-        try:
-            self.gmail_index_window = (
-                GmailIndexWindow(self)
-            )
-
-            self.gmail_index_window.setModal(False)
-
-            self.gmail_index_window.setWindowModality(
-                Qt.NonModal
-            )
-
-            self.gmail_index_window.show()
-
-            self.gmail_index_window.raise_()
-            self.gmail_index_window.activateWindow()
-
-            self.statusBar().showMessage(
-                "Gmail INDEX: מתחיל PARSE..."
-            )
-
-            self.gmail_index_window.start()
-
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "שגיאה",
-                f"לא ניתן להפעיל את Gmail INDEX:\n\n{exc}",
-            )
 
 
 def apply_styles(app):
     app.setStyleSheet(
         """
-        QMainWindow {
-            background: #f4f5f7;
-        }
-
         QWidget {
-            font-family: Arial;
+            font-family: "Arial";
             font-size: 14px;
         }
 
-        #sideMenu {
-            background: #20242a;
+        QMainWindow,
+        QDialog {
+            background: #f4f6f8;
         }
 
-        #menuTitle {
-            color: white;
-            font-size: 24px;
-            font-weight: bold;
-            padding: 10px;
-        }
-
-        #menuButton {
-            background: transparent;
-            color: #d9dde3;
-            border: none;
-            border-radius: 6px;
-            padding: 10px;
-            text-align: right;
-            font-size: 14px;
-        }
-
-        #menuButton:hover {
-            background: #30363d;
-            color: white;
-        }
-
-        #menuButton[selected="true"] {
-            background: #3b4350;
-            color: white;
-            font-weight: bold;
-        }
-
-        #pageTitle {
-            font-size: 30px;
-            font-weight: bold;
-            color: #20242a;
-        }
-
-        #pageSubtitle {
-            font-size: 16px;
-            color: #606872;
-        }
-
-        #card {
-            background: white;
-            border: 1px solid #d9dde3;
-            border-radius: 10px;
-        }
-
-        #cardTitle {
-            font-size: 19px;
-            font-weight: bold;
-            color: #20242a;
-        }
-
-        #cardDescription {
-            color: #606872;
-            font-size: 14px;
-        }
-
-        #primaryButton {
-            background: #2f6fed;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            padding: 10px 15px;
-            font-weight: bold;
-        }
-
-        #primaryButton:hover {
-            background: #245dcc;
-        }
-
-        #primaryButton:pressed {
-            background: #1e4fae;
-        }
-
-        QStatusBar {
-            background: #e9ebef;
-            color: #40464f;
-        }
-
-        #gmailImportTitle {
+        QLabel#logo {
             font-size: 25px;
             font-weight: bold;
-            color: #20242a;
-        }
-
-        #gmailImportStatus {
-            font-size: 15px;
-            font-weight: bold;
-            color: #40464f;
-            padding-bottom: 5px;
-        }
-
-        #gmailImportOutput {
-            background: #111418;
-            color: #e6e9ed;
-            border: 1px solid #343a40;
-            border-radius: 7px;
             padding: 10px;
-            font-family: Menlo, Monaco, Consolas, monospace;
-            font-size: 12px;
         }
 
-        #gmailImportInputFrame {
-            background: #e9ebef;
-            border: 1px solid #cdd2d8;
-            border-radius: 7px;
-        }
-
-        #gmailImportInputLabel {
+        QLabel#windowTitle,
+        QLabel#pageTitle {
+            font-size: 24px;
             font-weight: bold;
-            color: #30353b;
+            padding: 4px;
         }
 
-        #gmailImportInput {
-            background: white;
-            color: #20242a;
-            border: 1px solid #aeb4bc;
-            border-radius: 5px;
-            padding: 8px;
-            font-family: Menlo, Monaco, Consolas, monospace;
+        QLabel#pageSubtitle {
+            font-size: 15px;
+            color: #606770;
+            padding-bottom: 10px;
         }
 
-        #gmailImportInput:focus {
-            border: 2px solid #2f6fed;
-        }
-
-        #gmailImportSendButton {
-            background: #2f6fed;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 8px 18px;
-            font-weight: bold;
-        }
-
-        #gmailImportSendButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
-        }
-
-        #gmailImportYesButton {
-            background: #2e8b57;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 8px 20px;
-            font-weight: bold;
-        }
-
-        #gmailImportYesButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
-        }
-
-        #gmailImportNoButton {
-            background: #b23b3b;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 8px 20px;
-            font-weight: bold;
-        }
-
-        #gmailImportNoButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
-        }
-
-        #gmailImportCloseButton {
-            background: #2f6fed;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            padding: 10px 25px;
-            font-weight: bold;
-            min-width: 120px;
-        }
-
-        #gmailImportCloseButton:hover {
-            background: #245dcc;
-        }
-
-        #gmailImportCloseButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
-        }
-
-        #gmailIndexTitle {
-            font-size: 22px;
-            font-weight: bold;
-            color: #20242a;
-        }
-
-        #gmailIndexStatus {
+        QLabel#statusLabel {
             font-size: 14px;
             font-weight: bold;
-            color: #40464f;
-            padding-bottom: 3px;
+            padding: 6px;
         }
 
-        #gmailIndexOutput {
-            background: #111418;
-            color: #e6e9ed;
-            border: 1px solid #343a40;
-            border-radius: 7px;
+        QLabel#inputLabel {
+            font-weight: bold;
+        }
+
+        QLabel#inputHint {
+            color: #606770;
+        }
+
+        QLabel#cardTitle {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        QLabel#cardDescription {
+            color: #606770;
+            padding-bottom: 4px;
+        }
+
+        QLabel#versionLabel {
+            color: #777777;
             padding: 8px;
-            font-family: Menlo, Monaco, Consolas, monospace;
-            font-size: 11px;
         }
 
-        #gmailIndexStopButton {
-            background: #b23b3b;
-            color: white;
-            border: none;
+        QFrame#sideMenu {
+            background: #ffffff;
+            border-right: 1px solid #d7dce1;
+        }
+
+        QFrame#separator {
+            color: #d7dce1;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        QFrame#card {
+            background: #ffffff;
+            border: 1px solid #d9dee3;
+            border-radius: 8px;
+        }
+
+        QFrame#inputFrame {
+            background: #ffffff;
+            border: 1px solid #d9dee3;
+            border-radius: 8px;
+        }
+
+        QPushButton#menuButton {
+            text-align: right;
+            padding: 10px 14px;
+            border: 1px solid transparent;
             border-radius: 6px;
-            padding: 8px 22px;
-            font-weight: bold;
-            min-width: 100px;
+            background: #ffffff;
         }
 
-        #gmailIndexStopButton:hover {
-            background: #982f2f;
+        QPushButton#menuButton:hover {
+            background: #eef2f5;
+            border: 1px solid #d7dce1;
         }
 
-        #gmailIndexStopButton:pressed {
-            background: #7f2626;
-        }
-
-        #gmailIndexStopButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
-        }
-
-        #gmailIndexCloseButton {
-            background: #2f6fed;
-            color: white;
-            border: none;
+        QPushButton {
+            min-height: 36px;
+            padding: 6px 16px;
+            border: 1px solid #c7cdd3;
             border-radius: 6px;
-            padding: 8px 22px;
-            font-weight: bold;
-            min-width: 100px;
+            background: #ffffff;
         }
 
-        #gmailIndexCloseButton:hover {
-            background: #245dcc;
+        QPushButton:hover {
+            background: #eef2f5;
         }
 
-        #gmailIndexCloseButton:disabled {
-            background: #aeb4bc;
-            color: #e8eaed;
+        QPushButton:disabled {
+            color: #999999;
+            background: #eeeeee;
+        }
+
+        QLineEdit {
+            min-height: 36px;
+            padding: 4px 10px;
+            border: 1px solid #c7cdd3;
+            border-radius: 6px;
+            background: #ffffff;
+        }
+
+        QPlainTextEdit {
+            background: #ffffff;
+            border: 1px solid #d7dce1;
+            border-radius: 6px;
+            padding: 8px;
         }
         """
     )
@@ -2414,18 +1870,13 @@ def apply_styles(app):
 def main():
     app = QApplication(sys.argv)
 
-    app.setApplicationName(
-        "Alcalay"
-    )
-
-    app.setOrganizationName(
-        "Alcalay"
+    app.setLayoutDirection(
+        Qt.LayoutDirection.RightToLeft
     )
 
     apply_styles(app)
 
     window = MainWindow()
-
     window.show()
 
     sys.exit(
