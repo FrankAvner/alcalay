@@ -2,20 +2,22 @@
 
 """
 Alcalay - Unified Search Window
-================================
 
 Central search window for Alcalay repositories.
 
 Current active repository:
+
     - Gmail data already downloaded, parsed and indexed in PostgreSQL.
 
 Important:
+
     - This window does NOT connect to Gmail.
     - It does NOT call the Gmail API.
     - It searches only data already stored locally/PostgreSQL.
     - Future repositories can be added without changing the main search UI.
 
 Current Gmail search source:
+
     public.gmail_search_index
 """
 
@@ -23,7 +25,8 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +51,7 @@ from PySide6.QtWidgets import (
 )
 
 from database.connection import DatabaseConnection
+from search.search_result_window import SearchResultWindow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -58,9 +62,11 @@ class SearchWindow(QMainWindow):
     Unified Alcalay repository search window.
 
     Current repository:
+
         Gmail / PostgreSQL
 
     The search is performed against gmail_search_index.
+
     No Gmail API access is performed here.
     """
 
@@ -172,14 +178,17 @@ class SearchWindow(QMainWindow):
         mode_label.setMinimumWidth(100)
 
         self.source_mode_combo = QComboBox()
+
         self.source_mode_combo.addItem(
             "כל המאגרים",
             "all",
         )
+
         self.source_mode_combo.addItem(
             "בחירת מאגרים",
             "selected",
         )
+
         self.source_mode_combo.currentIndexChanged.connect(
             self._update_source_controls
         )
@@ -261,7 +270,13 @@ class SearchWindow(QMainWindow):
         )
 
         layout.addWidget(text_label, row, 0)
-        layout.addWidget(self.text_edit, row, 1, 1, 3)
+        layout.addWidget(
+            self.text_edit,
+            row,
+            1,
+            1,
+            3,
+        )
 
         row += 1
 
@@ -300,14 +315,17 @@ class SearchWindow(QMainWindow):
         attachment_label.setAlignment(Qt.AlignRight)
 
         self.attachment_combo = QComboBox()
+
         self.attachment_combo.addItem(
             "הכול",
             "all",
         )
+
         self.attachment_combo.addItem(
             "עם קבצים מצורפים",
             "yes",
         )
+
         self.attachment_combo.addItem(
             "ללא קבצים מצורפים",
             "no",
@@ -347,6 +365,7 @@ class SearchWindow(QMainWindow):
         self.from_enabled.toggled.connect(
             self.from_date.setEnabled
         )
+
         self.to_enabled.toggled.connect(
             self.to_date.setEnabled
         )
@@ -417,12 +436,15 @@ class SearchWindow(QMainWindow):
         self.results_table.setSelectionBehavior(
             QTableWidget.SelectRows
         )
+
         self.results_table.setSelectionMode(
             QTableWidget.SingleSelection
         )
+
         self.results_table.setEditTriggers(
             QTableWidget.NoEditTriggers
         )
+
         self.results_table.setAlternatingRowColors(True)
         self.results_table.setWordWrap(True)
 
@@ -431,7 +453,6 @@ class SearchWindow(QMainWindow):
         )
 
         header = self.results_table.horizontalHeader()
-
         header.setStretchLastSection(True)
 
         layout.addWidget(self.results_table)
@@ -447,7 +468,6 @@ class SearchWindow(QMainWindow):
 
         try:
             self.db = DatabaseConnection()
-
             self.connection = self.db.connect()
 
             if self.connection is None:
@@ -482,7 +502,6 @@ class SearchWindow(QMainWindow):
 
     def _close_database_connection(self) -> None:
         connection = self.connection
-
         self.connection = None
 
         if connection is not None:
@@ -499,7 +518,6 @@ class SearchWindow(QMainWindow):
 
     def _update_source_controls(self) -> None:
         mode = self.source_mode_combo.currentData()
-
         selected_mode = mode == "selected"
 
         self.gmail_checkbox.setEnabled(
@@ -567,6 +585,7 @@ class SearchWindow(QMainWindow):
         if "gmail" not in sources:
             self.results = []
             self._display_results()
+
             self.status_label.setText(
                 "המקור שנבחר עדיין אינו פעיל."
             )
@@ -574,9 +593,11 @@ class SearchWindow(QMainWindow):
 
         try:
             self.search_button.setEnabled(False)
+
             self.status_label.setText(
                 "מחפש בנתוני Gmail המקומיים..."
             )
+
             QApplication.processEvents()
 
             query, params = self._build_gmail_query()
@@ -587,7 +608,6 @@ class SearchWindow(QMainWindow):
             )
 
             self.results = rows
-
             self._display_results()
 
             self.status_label.setText(
@@ -613,11 +633,8 @@ class SearchWindow(QMainWindow):
         params: List[Any] = []
 
         free_text = self.text_edit.text().strip()
-
         sender = self.sender_edit.text().strip()
-
         recipient = self.recipient_edit.text().strip()
-
         subject = self.subject_edit.text().strip()
 
         attachment_mode = (
@@ -631,6 +648,7 @@ class SearchWindow(QMainWindow):
                 websearch_to_tsquery('simple', %s)
                 """
             )
+
             params.append(free_text)
 
         if sender:
@@ -644,6 +662,7 @@ class SearchWindow(QMainWindow):
             )
 
             sender_value = f"%{sender}%"
+
             params.extend(
                 [
                     sender_value,
@@ -676,6 +695,7 @@ class SearchWindow(QMainWindow):
             conditions.append(
                 "subject ILIKE %s"
             )
+
             params.append(
                 f"%{subject}%"
             )
@@ -715,11 +735,13 @@ class SearchWindow(QMainWindow):
                 "date_sent < %s"
             )
 
+            next_day = date_value + timedelta(days=1)
+
             params.append(
                 datetime(
-                    date_value.year,
-                    date_value.month,
-                    date_value.day + 1,
+                    next_day.year,
+                    next_day.month,
+                    next_day.day,
                     0,
                     0,
                     0,
@@ -774,6 +796,7 @@ class SearchWindow(QMainWindow):
         query: str,
         params: List[Any],
     ) -> List[Dict[str, Any]]:
+
         connection = self._get_connection()
 
         if connection is None:
@@ -950,6 +973,7 @@ class SearchWindow(QMainWindow):
         row: int,
         column: int,
     ) -> None:
+
         if row < 0:
             return
 
@@ -958,20 +982,25 @@ class SearchWindow(QMainWindow):
 
         result = self.results[row]
 
-        details = self._format_result_details(
-            result
+        window = SearchResultWindow(
+            result,
+            self,
         )
 
-        QMessageBox.information(
-            self,
-            "פרטי תוצאה",
-            details,
+        window.setAttribute(
+            Qt.WA_DeleteOnClose,
+            True,
         )
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _format_result_details(
         self,
         result: Dict[str, Any],
     ) -> str:
+
         lines: List[str] = []
 
         lines.append(
@@ -1054,6 +1083,7 @@ class SearchWindow(QMainWindow):
                         default=str,
                     )
                 )
+
             except Exception:
                 lines.append(
                     self._safe_text(metadata)
@@ -1079,7 +1109,6 @@ class SearchWindow(QMainWindow):
         self.to_enabled.setChecked(False)
 
         self.results = []
-
         self.results_table.setRowCount(0)
 
         self.status_label.setText(
@@ -1109,6 +1138,7 @@ class SearchWindow(QMainWindow):
         self,
         value: Any,
     ) -> str:
+
         if value is None:
             return ""
 
@@ -1123,6 +1153,7 @@ class SearchWindow(QMainWindow):
         self,
         result: Dict[str, Any],
     ) -> str:
+
         name = self._safe_text(
             result.get("sender_name")
         )
@@ -1140,6 +1171,7 @@ class SearchWindow(QMainWindow):
         self,
         result: Dict[str, Any],
     ) -> str:
+
         recipients = result.get(
             "recipients"
         )
@@ -1164,6 +1196,7 @@ class SearchWindow(QMainWindow):
         self,
         value: Any,
     ) -> str:
+
         if value is None:
             return ""
 
@@ -1187,14 +1220,18 @@ class SearchWindow(QMainWindow):
                         parts.append(
                             f"{name} <{email}>"
                         )
+
                     elif email:
                         parts.append(email)
+
                     elif name:
                         parts.append(name)
+
                     else:
                         parts.append(
                             self._safe_text(item)
                         )
+
                 else:
                     parts.append(
                         self._safe_text(item)
@@ -1229,6 +1266,7 @@ class SearchWindow(QMainWindow):
                     value,
                     ensure_ascii=False,
                 )
+
             except Exception:
                 return self._safe_text(value)
 
@@ -1239,6 +1277,7 @@ class SearchWindow(QMainWindow):
         value: Any,
         maximum: int = 350,
     ) -> str:
+
         text = self._safe_text(value)
 
         text = " ".join(
