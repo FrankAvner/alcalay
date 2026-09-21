@@ -114,14 +114,7 @@ class GmailCopy:
         if not value:
             return b""
 
-        padding = (
-            "="
-            * (
-                4
-                - len(value) % 4
-            )
-            % 4
-        )
+        padding = "=" * ((4 - len(value) % 4) % 4)
 
         return base64.urlsafe_b64decode(
             value + padding
