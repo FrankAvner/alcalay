@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import random
 import re
 import sys
 import time
@@ -37,11 +36,9 @@ DRY_RUN = False
 COPY_MAX_MESSAGES: int | None = None
 
 # Gmail API retry configuration
-GMAIL_MAX_RETRIES = 8
-GMAIL_RETRY_BASE_SECONDS = 1.0
-GMAIL_RETRY_MAX_SECONDS = 64.0
-GMAIL_MIN_REQUEST_INTERVAL_SECONDS = 0.30
-GMAIL_RETRY_JITTER_MAX_SECONDS = 1.0
+GMAIL_MAX_RETRIES = 6
+GMAIL_RETRY_BASE_SECONDS = 2.0
+GMAIL_RETRY_MAX_SECONDS = 60.0
 
 DEFAULT_STORAGE_ROOT = (
     PROJECT_ROOT
@@ -93,7 +90,6 @@ class GmailCopy:
         )
 
         self.service = None
-        self._last_gmail_request_at = 0.0
 
         self.gmail_account_id: int | None = None
         self.source_account_id: int | None = None
@@ -112,8 +108,6 @@ class GmailCopy:
             "raw_messages_saved": 0,
             "errors": 0,
             "rate_limit_retries": 0,
-            "gmail_api_requests": 0,
-            "gmail_api_throttled_waits": 0,
         }
 
     # ========================================================
@@ -533,86 +527,8 @@ class GmailCopy:
         )
 
     # ========================================================
-    # GMAIL API RETRY / THROTTLING
+    # GMAIL API RETRY
     # ========================================================
-
-    def _gmail_error_status(self, exc: Exception) -> int | None:
-        resp = getattr(exc, "resp", None)
-        status = getattr(resp, "status", None)
-
-        try:
-            return int(status) if status is not None else None
-        except (TypeError, ValueError):
-            return None
-
-    def _gmail_error_reason(self, exc: Exception) -> str:
-        parts: list[str] = []
-
-        for attribute in ("reason", "content"):
-            value = getattr(exc, attribute, None)
-            if value:
-                if isinstance(value, bytes):
-                    try:
-                        value = value.decode("utf-8", errors="replace")
-                    except Exception:
-                        value = str(value)
-                parts.append(str(value))
-
-        parts.append(str(exc))
-        return " ".join(parts).lower()
-
-    def _is_retryable_gmail_error(
-        self,
-        exc: Exception,
-    ) -> bool:
-        status = self._gmail_error_status(exc)
-        error_text = self._gmail_error_reason(exc)
-
-        if status in (429, 500, 502, 503, 504):
-            return True
-
-        if status == 403 and (
-            "ratelimitexceeded" in error_text
-            or "userratelimitexceeded" in error_text
-            or "quota exceeded" in error_text
-            or "rate limit exceeded" in error_text
-        ):
-            return True
-
-        return (
-            "ratelimitexceeded" in error_text
-            or "userratelimitexceeded" in error_text
-        )
-
-    def _wait_for_gmail_request_slot(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last_gmail_request_at
-        remaining = GMAIL_MIN_REQUEST_INTERVAL_SECONDS - elapsed
-
-        if remaining > 0:
-            self.stats["gmail_api_throttled_waits"] += 1
-            time.sleep(remaining)
-
-        self._last_gmail_request_at = time.monotonic()
-
-    def _retry_wait_seconds(
-        self,
-        attempt: int,
-    ) -> float:
-        exponential = min(
-            GMAIL_RETRY_BASE_SECONDS * (2 ** attempt),
-            GMAIL_RETRY_MAX_SECONDS,
-        )
-
-        jitter = random.uniform(
-            0.0,
-            GMAIL_RETRY_JITTER_MAX_SECONDS,
-        )
-
-        return min(
-            exponential + jitter,
-            GMAIL_RETRY_MAX_SECONDS,
-        )
 
     def execute_with_retry(
         self,
@@ -620,76 +536,84 @@ class GmailCopy:
         description: str,
     ):
         """
-        Execute one Gmail API request safely.
+        Execute a Gmail API request with retry/backoff.
 
-        Gmail currently enforces a per-user quota of 6,000 quota
-        units per minute for the Gmail API. messages.list costs 5
-        units and messages.get costs 20 units.
-
-        Therefore COPY deliberately spaces API requests and uses
-        truncated exponential backoff with jitter for temporary
-        rate-limit errors.
-
-        The request is recreated by the caller when necessary; a
-        googleapiclient request object can safely be executed again.
+        This is mainly for:
+            rateLimitExceeded
+            userRateLimitExceeded
+            429
+            transient 5xx errors
         """
 
-        last_exception: Exception | None = None
+        last_exception = None
 
-        for attempt in range(GMAIL_MAX_RETRIES + 1):
-            self._wait_for_gmail_request_slot()
-            self.stats["gmail_api_requests"] += 1
-
+        for attempt in range(
+            GMAIL_MAX_RETRIES + 1
+        ):
             try:
-                response = request.execute()
-                return response
+                return request.execute()
 
             except Exception as exc:
                 last_exception = exc
 
-                if not self._is_retryable_gmail_error(exc):
+                error_text = str(
+                    exc
+                ).lower()
+
+                retryable = (
+                    "ratelimitexceeded"
+                    in error_text
+                    or "userratelimitexceeded"
+                    in error_text
+                    or "quota exceeded"
+                    in error_text
+                    or "429"
+                    in error_text
+                    or "500"
+                    in error_text
+                    or "502"
+                    in error_text
+                    or "503"
+                    in error_text
+                    or "504"
+                    in error_text
+                )
+
+                if not retryable:
                     raise
 
                 if attempt >= GMAIL_MAX_RETRIES:
-                    self.log(
-                        "[GMAIL RETRY] Exhausted retries for: "
-                        + description
-                    )
                     raise
 
-                status = self._gmail_error_status(exc)
-                status_text = (
-                    str(status)
-                    if status is not None
-                    else "unknown"
+                wait_seconds = min(
+                    GMAIL_RETRY_BASE_SECONDS
+                    * (
+                        2 ** attempt
+                    ),
+                    GMAIL_RETRY_MAX_SECONDS,
                 )
 
-                wait_seconds = self._retry_wait_seconds(
-                    attempt
-                )
-
-                self.stats["rate_limit_retries"] += 1
+                self.stats[
+                    "rate_limit_retries"
+                ] += 1
 
                 self.log(
-                    "[GMAIL RATE LIMIT] "
+                    "[GMAIL RETRY] "
                     + description
-                    + " | HTTP "
-                    + status_text
-                )
-
-                self.log(
-                    "[GMAIL RETRY] ניסיון "
+                    + " | ניסיון "
                     + str(attempt + 1)
                     + "/"
                     + str(GMAIL_MAX_RETRIES)
                     + " | המתנה "
-                    + f"{wait_seconds:.1f}"
+                    + str(wait_seconds)
                     + " שניות"
                 )
 
-                time.sleep(wait_seconds)
+                time.sleep(
+                    wait_seconds
+                )
 
-        if last_exception is not None:
+        if last_exception:
             raise last_exception
 
         raise RuntimeError(
@@ -1713,11 +1637,6 @@ class GmailCopy:
                 else "REAL COPY"
             )
         )
-        self.log(
-            "Gmail API pacing: "
-            + f"{GMAIL_MIN_REQUEST_INTERVAL_SECONDS:.2f}"
-            + " sec/request"
-        )
         self.log("=" * 72)
 
         # ----------------------------------------------------
@@ -2158,24 +2077,6 @@ class GmailCopy:
             + str(
                 self.stats[
                     "rate_limit_retries"
-                ]
-            )
-        )
-
-        self.log(
-            "Gmail API requests: "
-            + str(
-                self.stats[
-                    "gmail_api_requests"
-                ]
-            )
-        )
-
-        self.log(
-            "Gmail pacing waits: "
-            + str(
-                self.stats[
-                    "gmail_api_throttled_waits"
                 ]
             )
         )
