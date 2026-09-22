@@ -31,18 +31,15 @@ Workflow:
 
 Important:
 
-    - This module does NOT download files.
-    - This module does NOT export Google Workspace files.
-    - This module does NOT modify Google Drive.
-    - This module does NOT delete PostgreSQL records.
-    - This module does NOT perform duplicate detection.
-    - This module does NOT perform version selection.
-    - This module only performs content-based keyword detection.
+    - No file download.
+    - No Google Drive export.
+    - No Google Drive write.
+    - No duplicate detection.
+    - No version selection.
+    - Content keyword detection only.
 
 Filename/path filtering is performed by:
     src/drive/drive_keyword_filter.py
-
-Download and duplicate/version handling will be performed later.
 """
 
 from __future__ import annotations
@@ -53,9 +50,9 @@ from pathlib import Path
 from typing import Any
 
 
-# ---------------------------------------------------------------------------
-# Project root
-# ---------------------------------------------------------------------------
+# ============================================================================
+# PROJECT ROOT
+# ============================================================================
 
 CURRENT_FILE = Path(__file__).resolve()
 PROJECT_ROOT = CURRENT_FILE.parents[2]
@@ -64,15 +61,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
-# ---------------------------------------------------------------------------
-# Database connection
-# ---------------------------------------------------------------------------
+# ============================================================================
+# DATABASE
+# ============================================================================
 
 def create_database_connection():
-    """
-    Create a PostgreSQL connection using Alcalay configuration.
-    """
-
     from src.database.connection import DatabaseConnection
 
     database = DatabaseConnection()
@@ -80,16 +73,12 @@ def create_database_connection():
     return database.connect()
 
 
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
+# ============================================================================
+# DATA CLASSES
+# ============================================================================
 
 @dataclass(frozen=True)
 class KeywordRule:
-    """
-    One enabled Google Drive keyword rule.
-    """
-
     id: int
     keyword: str
     enabled: bool
@@ -102,10 +91,6 @@ class KeywordRule:
 
 @dataclass(frozen=True)
 class DriveFileRecord:
-    """
-    PostgreSQL representation of a Drive file.
-    """
-
     id: int
     drive_file_id: str
     name: str
@@ -113,14 +98,11 @@ class DriveFileRecord:
     is_relevant: bool | None
 
 
-# ---------------------------------------------------------------------------
-# Main filter
-# ---------------------------------------------------------------------------
+# ============================================================================
+# CONTENT FILTER
+# ============================================================================
 
 class DriveContentKeywordFilter:
-    """
-    Searches Google Drive indexed content for configured keywords.
-    """
 
     REPOSITORY_KEY = "alcalay"
 
@@ -137,13 +119,9 @@ class DriveContentKeywordFilter:
         ")"
     )
 
-    def __init__(
-        self,
-        connection,
-    ) -> None:
+    def __init__(self, connection) -> None:
 
         self.connection = connection
-
         self.service = connection.service
 
         if self.service is None:
@@ -151,17 +129,11 @@ class DriveContentKeywordFilter:
                 "Google Drive עדיין לא מחובר."
             )
 
-    # ------------------------------------------------------------------
-    # PostgreSQL helpers
-    # ------------------------------------------------------------------
+    # ========================================================================
+    # POSTGRESQL
+    # ========================================================================
 
-    def _get_repository_id(
-        self,
-        cursor,
-    ) -> int:
-        """
-        Return the PostgreSQL repository ID for Alcalay.
-        """
+    def _get_repository_id(self, cursor) -> int:
 
         cursor.execute(
             """
@@ -255,15 +227,6 @@ class DriveContentKeywordFilter:
         cursor,
         repository_id: int,
     ) -> list[DriveFileRecord]:
-        """
-        Load files belonging to the Alcalay repository.
-
-        Only files that are not already marked relevant are candidates
-        for the content search.
-
-        Files already found relevant by filename/path filtering do not
-        need another content search.
-        """
 
         cursor.execute(
             """
@@ -302,20 +265,14 @@ class DriveContentKeywordFilter:
 
         return files
 
-    # ------------------------------------------------------------------
-    # Google Drive query helpers
-    # ------------------------------------------------------------------
+    # ========================================================================
+    # GOOGLE DRIVE QUERY
+    # ========================================================================
 
     @staticmethod
     def _escape_drive_query_value(
         value: str,
     ) -> str:
-        """
-        Escape a value for a Google Drive q expression.
-
-        Google Drive query strings use single quotes around string
-        values. Backslashes and single quotes therefore need escaping.
-        """
 
         value = value.replace(
             "\\",
@@ -334,18 +291,6 @@ class DriveContentKeywordFilter:
         cls,
         keyword: str,
     ) -> str:
-        """
-        Build a Google Drive fullText query.
-
-        For a single-word keyword:
-            fullText contains 'חוזה'
-
-        For a multi-word keyword:
-            fullText contains '"בן יהודה"'
-
-        Google Drive treats the double-quoted right operand as an
-        exact phrase search.
-        """
 
         keyword = keyword.strip()
 
@@ -376,14 +321,6 @@ class DriveContentKeywordFilter:
         self,
         keyword: str,
     ) -> set[str]:
-        """
-        Search Google Drive's indexed full text for one keyword.
-
-        Returns:
-            Set of Google Drive file IDs.
-
-        No file content is downloaded.
-        """
 
         query = self._build_full_text_query(
             keyword
@@ -395,6 +332,12 @@ class DriveContentKeywordFilter:
 
         while True:
 
+            # IMPORTANT:
+            # Do NOT use orderBy together with fullText.
+            #
+            # Google Drive returns:
+            # "Sorting is not supported for queries with fullText terms."
+
             request = (
                 self.service
                 .files()
@@ -404,7 +347,6 @@ class DriveContentKeywordFilter:
                     fields=self.FILE_FIELDS,
                     pageSize=self.PAGE_SIZE,
                     pageToken=page_token,
-                    orderBy="folder,name",
                     supportsAllDrives=True,
                     includeItemsFromAllDrives=True,
                 )
@@ -451,9 +393,9 @@ class DriveContentKeywordFilter:
 
         return matched_ids
 
-    # ------------------------------------------------------------------
-    # PostgreSQL update helpers
-    # ------------------------------------------------------------------
+    # ========================================================================
+    # POSTGRESQL UPDATES
+    # ========================================================================
 
     def _insert_content_match(
         self,
@@ -461,11 +403,6 @@ class DriveContentKeywordFilter:
         drive_file: DriveFileRecord,
         rule: KeywordRule,
     ) -> bool:
-        """
-        Register one content keyword match.
-
-        Returns True if a new database row was inserted.
-        """
 
         cursor.execute(
             """
@@ -512,9 +449,6 @@ class DriveContentKeywordFilter:
         drive_file: DriveFileRecord,
         keyword: str,
     ) -> None:
-        """
-        Mark the Drive file as relevant because of content.
-        """
 
         cursor.execute(
             """
@@ -537,15 +471,6 @@ class DriveContentKeywordFilter:
         cursor,
         drive_file: DriveFileRecord,
     ) -> None:
-        """
-        Mark a candidate as checked.
-
-        If filename/path filtering previously established FALSE,
-        this remains FALSE.
-
-        If the value is NULL, set it to FALSE because the content
-        search has now been completed.
-        """
 
         cursor.execute(
             """
@@ -566,16 +491,11 @@ class DriveContentKeywordFilter:
             ),
         )
 
-    # ------------------------------------------------------------------
-    # Main processing
-    # ------------------------------------------------------------------
+    # ========================================================================
+    # MAIN PROCESSING
+    # ========================================================================
 
     def run(self) -> dict[str, Any]:
-        """
-        Execute the complete content keyword search.
-
-        Returns a summary dictionary.
-        """
 
         summary: dict[str, Any] = {
             "repository": self.REPOSITORY_KEY,
@@ -630,26 +550,14 @@ class DriveContentKeywordFilter:
 
                     return summary
 
-                # ------------------------------------------------------
-                # Candidate lookup by Google Drive ID
-                # ------------------------------------------------------
-
-                candidate_by_drive_id: dict[
-                    str,
-                    DriveFileRecord,
-                ] = {
+                candidate_by_drive_id = {
                     item.drive_file_id: item
                     for item in candidates
                 }
 
-                # ------------------------------------------------------
-                # Search every configured keyword.
-                #
-                # We intentionally search Google Drive first and only
-                # then intersect results with the PostgreSQL repository.
-                #
-                # This prevents files outside Alcalay from being added.
-                # ------------------------------------------------------
+                candidate_drive_ids = set(
+                    candidate_by_drive_id.keys()
+                )
 
                 matched_file_ids_by_keyword: dict[
                     int,
@@ -677,9 +585,7 @@ class DriveContentKeywordFilter:
 
                         relevant_ids = (
                             google_ids
-                            & set(
-                                candidate_by_drive_id.keys()
-                            )
+                            & candidate_drive_ids
                         )
 
                         print(
@@ -739,9 +645,9 @@ class DriveContentKeywordFilter:
                             f"{detail}"
                         )
 
-                # ------------------------------------------------------
-                # Determine which candidate files were not matched.
-                # ------------------------------------------------------
+                # ------------------------------------------------------------
+                # Determine files with no content match.
+                # ------------------------------------------------------------
 
                 relevant_drive_ids: set[str] = set()
 
@@ -756,9 +662,7 @@ class DriveContentKeywordFilter:
 
                     relevant_drive_ids.update(
                         google_ids
-                        & set(
-                            candidate_by_drive_id.keys()
-                        )
+                        & candidate_drive_ids
                     )
 
                 for drive_file in candidates:
@@ -780,10 +684,6 @@ class DriveContentKeywordFilter:
 
                 database_connection.commit()
 
-                # ------------------------------------------------------
-                # Count unique relevant files.
-                # ------------------------------------------------------
-
                 summary[
                     "relevant_files"
                 ] = len(
@@ -802,9 +702,9 @@ class DriveContentKeywordFilter:
 
             database_connection.close()
 
-    # ------------------------------------------------------------------
-    # Console output
-    # ------------------------------------------------------------------
+    # ========================================================================
+    # SUMMARY
+    # ========================================================================
 
     @staticmethod
     def print_summary(
@@ -887,19 +787,17 @@ class DriveContentKeywordFilter:
             print("-" * 72)
 
             for detail in errors_detail:
+
                 print(
                     f"[ERROR] {detail}"
                 )
 
 
-# ---------------------------------------------------------------------------
+# ============================================================================
 # CLI
-# ---------------------------------------------------------------------------
+# ============================================================================
 
 def main() -> int:
-    """
-    Command-line entry point.
-    """
 
     print()
     print("=" * 72)

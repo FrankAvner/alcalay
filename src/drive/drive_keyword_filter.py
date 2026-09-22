@@ -1,60 +1,93 @@
 # -*- coding: utf-8 -*-
 
 """
-Alcalay - Google Drive Keyword Filter
-=====================================
+Alcalay - Google Drive Content Keyword Filter
+==============================================
 
-Phase 1:
-    Metadata keyword filtering based on:
+Searches the indexed content of Google Drive files for the
+configured Alcalay keyword rules.
 
-        1. File name
-        2. Full Google Drive folder path
+Workflow:
 
-This module does NOT:
-
-    - Download files
-    - Export Google Workspace files
-    - Modify Google Drive
-    - Delete files
-    - Move files
-    - Rename files
-    - Perform duplicate detection
-    - Search inside document contents
-
-Content search will be added as a separate phase.
-
-Database tables used:
-
-    drive_repositories
-    drive_keyword_rule_sets
-    drive_keyword_rules
-    drive_folders
-    drive_files
+    PostgreSQL drive_files
+            |
+            v
+    Files registered in repository "alcalay"
+            |
+            v
+    Files not already relevant by filename/path
+            |
+            v
+    Google Drive fullText search
+            |
+            v
+    Match Google Drive file IDs against PostgreSQL
+            |
+            v
     drive_file_keyword_matches
+            |
+            v
+    drive_files.is_relevant = TRUE
+
+Important:
+
+    - This module does NOT download files.
+    - This module does NOT export Google Workspace files.
+    - This module does NOT modify Google Drive.
+    - This module does NOT delete PostgreSQL records.
+    - This module does NOT perform duplicate detection.
+    - This module does NOT perform version selection.
+    - This module only performs content-based keyword detection.
+
+Filename/path filtering is performed by:
+    src/drive/drive_keyword_filter.py
+
+Download and duplicate/version handling will be performed later.
 """
 
 from __future__ import annotations
 
-import argparse
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
-
-import psycopg
+from typing import Any
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# ---------------------------------------------------------------------------
+# Project root
+# ---------------------------------------------------------------------------
+
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = CURRENT_FILE.parents[2]
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 
+# ---------------------------------------------------------------------------
+# Database connection
+# ---------------------------------------------------------------------------
+
+def create_database_connection():
+    """
+    Create a PostgreSQL connection using Alcalay configuration.
+    """
+
+    from src.database.connection import DatabaseConnection
+
+    database = DatabaseConnection()
+
+    return database.connect()
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
 @dataclass(frozen=True)
 class KeywordRule:
     """
-    One active keyword rule loaded from PostgreSQL.
+    One enabled Google Drive keyword rule.
     """
 
     id: int
@@ -67,187 +100,145 @@ class KeywordRule:
     search_metadata: bool
 
 
-@dataclass
+@dataclass(frozen=True)
 class DriveFileRecord:
     """
-    Drive file information required by the metadata filter.
+    PostgreSQL representation of a Drive file.
     """
 
     id: int
-    repository_id: int
     drive_file_id: str
-    parent_drive_file_id: Optional[str]
     name: str
     mime_type: str
-    is_trashed: bool
+    is_relevant: bool | None
 
 
-class DriveKeywordFilter:
+# ---------------------------------------------------------------------------
+# Main filter
+# ---------------------------------------------------------------------------
+
+class DriveContentKeywordFilter:
     """
-    Metadata-only keyword filtering engine.
-
-    Current search locations:
-
-        1. File name
-        2. Full Drive folder path
-
-    The database already contains flags for:
-
-        search_filename
-        search_description
-        search_path
-        search_metadata
-
-    However, drive_files currently has no description or general
-    metadata columns, so Phase 1 searches only filename and path.
-
-    Content search will be implemented separately.
+    Searches Google Drive indexed content for configured keywords.
     """
 
-    DEFAULT_RULE_SET_NAME = "default"
+    REPOSITORY_KEY = "alcalay"
 
-    MATCHED_IN_FILENAME = "filename"
-    MATCHED_IN_PATH = "path"
+    PAGE_SIZE = 1000
+
+    FILE_FIELDS = (
+        "nextPageToken,"
+        "files("
+        "id,"
+        "name,"
+        "mimeType,"
+        "modifiedTime,"
+        "trashed"
+        ")"
+    )
 
     def __init__(
         self,
-        connection: psycopg.Connection,
-        repository_key: str = "alcalay",
-        rule_set_name: str = DEFAULT_RULE_SET_NAME,
-    ):
+        connection,
+    ) -> None:
+
         self.connection = connection
-        self.repository_key = repository_key
-        self.rule_set_name = rule_set_name
 
-        self.repository_id: Optional[int] = None
-        self.rule_set_id: Optional[int] = None
+        self.service = connection.service
 
-        self.rules: list[KeywordRule] = []
-
-        self.folder_cache: dict[str, str] = {}
-        self.folder_parent_cache: dict[
-            str,
-            Optional[str],
-        ] = {}
-
-    # ------------------------------------------------------------------
-    # INITIALIZATION
-    # ------------------------------------------------------------------
-
-    def initialize(self) -> None:
-        """
-        Load repository, rule set and active keyword rules.
-        """
-
-        self.repository_id = self._load_repository_id()
-        self.rule_set_id = self._load_rule_set_id()
-        self.rules = self._load_keyword_rules()
-
-        if not self.rules:
+        if self.service is None:
             raise RuntimeError(
-                f"No enabled keyword rules found in rule set "
-                f"'{self.rule_set_name}'."
+                "Google Drive עדיין לא מחובר."
             )
 
-    def _load_repository_id(self) -> int:
+    # ------------------------------------------------------------------
+    # PostgreSQL helpers
+    # ------------------------------------------------------------------
+
+    def _get_repository_id(
+        self,
+        cursor,
+    ) -> int:
         """
-        Load repository ID from drive_repositories.
+        Return the PostgreSQL repository ID for Alcalay.
         """
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id
-                FROM drive_repositories
-                WHERE repository_key = %s
-                LIMIT 1
-                """,
-                (self.repository_key,),
-            )
+        cursor.execute(
+            """
+            SELECT id
+            FROM drive_repositories
+            WHERE repository_key = %s
+            """,
+            (self.REPOSITORY_KEY,),
+        )
 
-            row = cursor.fetchone()
+        row = cursor.fetchone()
 
         if row is None:
             raise RuntimeError(
-                f"Drive repository '{self.repository_key}' "
-                f"was not found."
+                "לא נמצא repository בשם "
+                f"'{self.REPOSITORY_KEY}' ב-drive_repositories."
             )
 
         return int(row[0])
 
-    def _load_rule_set_id(self) -> int:
-        """
-        Load enabled keyword rule set.
-        """
+    def _get_enabled_rule_set(
+        self,
+        cursor,
+    ) -> tuple[int, str]:
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id
-                FROM drive_keyword_rule_sets
-                WHERE name = %s
-                  AND enabled = true
-                ORDER BY id
-                LIMIT 1
-                """,
-                (self.rule_set_name,),
-            )
+        cursor.execute(
+            """
+            SELECT id, name
+            FROM drive_keyword_rule_sets
+            WHERE enabled = TRUE
+            ORDER BY id
+            LIMIT 1
+            """
+        )
 
-            row = cursor.fetchone()
+        row = cursor.fetchone()
 
         if row is None:
             raise RuntimeError(
-                f"Enabled keyword rule set "
-                f"'{self.rule_set_name}' was not found."
+                "לא נמצא enabled keyword rule set."
             )
 
-        return int(row[0])
+        return int(row[0]), str(row[1])
 
-    def _load_keyword_rules(self) -> list[KeywordRule]:
-        """
-        Load all enabled keyword rules belonging to the selected
-        rule set.
-        """
+    def _load_keyword_rules(
+        self,
+        cursor,
+        rule_set_id: int,
+    ) -> list[KeywordRule]:
 
-        if self.rule_set_id is None:
-            raise RuntimeError(
-                "Rule set has not been initialized."
-            )
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    keyword,
-                    enabled,
-                    case_sensitive,
-                    search_filename,
-                    search_description,
-                    search_path,
-                    search_metadata
-                FROM drive_keyword_rules
-                WHERE rule_set_id = %s
-                  AND enabled = true
-                ORDER BY id
-                """,
-                (self.rule_set_id,),
-            )
-
-            rows = cursor.fetchall()
+        cursor.execute(
+            """
+            SELECT
+                id,
+                keyword,
+                enabled,
+                case_sensitive,
+                search_filename,
+                search_description,
+                search_path,
+                search_metadata
+            FROM drive_keyword_rules
+            WHERE rule_set_id = %s
+              AND enabled = TRUE
+            ORDER BY id
+            """,
+            (rule_set_id,),
+        )
 
         rules: list[KeywordRule] = []
 
-        for row in rows:
-            keyword = str(row[1] or "").strip()
-
-            if not keyword:
-                continue
+        for row in cursor.fetchall():
 
             rules.append(
                 KeywordRule(
                     id=int(row[0]),
-                    keyword=keyword,
+                    keyword=str(row[1]),
                     enabled=bool(row[2]),
                     case_sensitive=bool(row[3]),
                     search_filename=bool(row[4]),
@@ -259,761 +250,706 @@ class DriveKeywordFilter:
 
         return rules
 
-    # ------------------------------------------------------------------
-    # FOLDER CACHE
-    # ------------------------------------------------------------------
-
-    def _load_folder_cache(self) -> None:
-        """
-        Load the complete folder hierarchy into memory.
-        """
-
-        if self.repository_id is None:
-            raise RuntimeError(
-                "Repository has not been initialized."
-            )
-
-        self.folder_cache.clear()
-        self.folder_parent_cache.clear()
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    drive_file_id,
-                    parent_drive_file_id,
-                    name
-                FROM drive_folders
-                WHERE repository_id = %s
-                  AND COALESCE(trashed, false) = false
-                """,
-                (self.repository_id,),
-            )
-
-            rows = cursor.fetchall()
-
-        for row in rows:
-            drive_file_id = str(row[0])
-
-            parent_drive_file_id = (
-                str(row[1])
-                if row[1] is not None
-                else None
-            )
-
-            name = str(row[2] or "")
-
-            self.folder_cache[drive_file_id] = name
-
-            self.folder_parent_cache[
-                drive_file_id
-            ] = parent_drive_file_id
-
-    def _build_folder_path(
+    def _load_candidate_files(
         self,
-        parent_drive_file_id: Optional[str],
-    ) -> str:
+        cursor,
+        repository_id: int,
+    ) -> list[DriveFileRecord]:
         """
-        Build the complete Drive folder path.
+        Load files belonging to the Alcalay repository.
 
-        Example:
+        Only files that are not already marked relevant are candidates
+        for the content search.
 
-            Alcalay / Documents
-
-        or:
-
-            Alcalay / Gmail / frank.avner@gmail.com / messages
+        Files already found relevant by filename/path filtering do not
+        need another content search.
         """
 
-        if not parent_drive_file_id:
-            return ""
-
-        parts: list[str] = []
-
-        current_id: Optional[str] = (
-            parent_drive_file_id
+        cursor.execute(
+            """
+            SELECT
+                id,
+                drive_file_id,
+                name,
+                mime_type,
+                is_relevant
+            FROM drive_files
+            WHERE repository_id = %s
+              AND is_trashed = FALSE
+              AND is_relevant IS DISTINCT FROM TRUE
+            ORDER BY id
+            """,
+            (repository_id,),
         )
-
-        visited: set[str] = set()
-
-        max_depth = 100
-
-        while current_id and len(parts) < max_depth:
-
-            if current_id in visited:
-                break
-
-            visited.add(current_id)
-
-            folder_name = self.folder_cache.get(
-                current_id
-            )
-
-            if folder_name:
-                parts.append(folder_name)
-
-            current_id = self.folder_parent_cache.get(
-                current_id
-            )
-
-        parts.reverse()
-
-        return " / ".join(parts)
-
-    # ------------------------------------------------------------------
-    # FILE LOADING
-    # ------------------------------------------------------------------
-
-    def _load_files(self) -> list[DriveFileRecord]:
-        """
-        Load all non-trashed files belonging to the repository.
-        """
-
-        if self.repository_id is None:
-            raise RuntimeError(
-                "Repository has not been initialized."
-            )
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    id,
-                    repository_id,
-                    drive_file_id,
-                    parent_drive_file_id,
-                    name,
-                    mime_type,
-                    is_trashed
-                FROM drive_files
-                WHERE repository_id = %s
-                  AND is_trashed = false
-                ORDER BY id
-                """,
-                (self.repository_id,),
-            )
-
-            rows = cursor.fetchall()
 
         files: list[DriveFileRecord] = []
 
-        for row in rows:
+        for row in cursor.fetchall():
+
             files.append(
                 DriveFileRecord(
                     id=int(row[0]),
-                    repository_id=int(row[1]),
-                    drive_file_id=str(row[2]),
-                    parent_drive_file_id=(
-                        str(row[3])
-                        if row[3] is not None
-                        else None
+                    drive_file_id=str(row[1]),
+                    name=str(row[2]),
+                    mime_type=str(row[3]),
+                    is_relevant=(
+                        None
+                        if row[4] is None
+                        else bool(row[4])
                     ),
-                    name=str(row[4] or ""),
-                    mime_type=str(row[5] or ""),
-                    is_trashed=bool(row[6]),
                 )
             )
 
         return files
 
     # ------------------------------------------------------------------
-    # KEYWORD MATCHING
+    # Google Drive query helpers
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _contains_keyword(
+    def _escape_drive_query_value(
         value: str,
+    ) -> str:
+        """
+        Escape a value for a Google Drive q expression.
+
+        Google Drive query strings use single quotes around string
+        values. Backslashes and single quotes therefore need escaping.
+        """
+
+        value = value.replace(
+            "\\",
+            "\\\\",
+        )
+
+        value = value.replace(
+            "'",
+            "\\'",
+        )
+
+        return value
+
+    @classmethod
+    def _build_full_text_query(
+        cls,
         keyword: str,
-        case_sensitive: bool,
-    ) -> bool:
+    ) -> str:
         """
-        Check whether keyword exists inside value.
+        Build a Google Drive fullText query.
 
-        Hebrew keywords are supported.
-        Case-insensitive matching uses Unicode casefold().
+        For a single-word keyword:
+            fullText contains 'חוזה'
+
+        For a multi-word keyword:
+            fullText contains '"בן יהודה"'
+
+        Google Drive treats the double-quoted right operand as an
+        exact phrase search.
         """
 
-        if not value or not keyword:
-            return False
+        keyword = keyword.strip()
 
-        if case_sensitive:
-            return keyword in value
+        if not keyword:
+            raise ValueError(
+                "Keyword ריק."
+            )
 
-        return keyword.casefold() in value.casefold()
+        escaped = cls._escape_drive_query_value(
+            keyword
+        )
 
-    def _match_file(
+        if " " in keyword:
+
+            return (
+                "fullText contains "
+                f"'\"{escaped}\"' "
+                "and trashed = false"
+            )
+
+        return (
+            "fullText contains "
+            f"'{escaped}' "
+            "and trashed = false"
+        )
+
+    def _search_google_drive(
         self,
-        file_record: DriveFileRecord,
-        folder_path: str,
-    ) -> list[tuple[KeywordRule, str, str]]:
+        keyword: str,
+    ) -> set[str]:
         """
-        Find all keyword matches for one file.
+        Search Google Drive's indexed full text for one keyword.
 
         Returns:
+            Set of Google Drive file IDs.
 
-            (rule, matched_text, matched_in)
+        No file content is downloaded.
 
-        matched_in:
-
-            filename
-            path
+        IMPORTANT:
+            Google Drive does not allow orderBy when a fullText
+            search term is present. Results are returned by Google
+            according to relevance.
         """
 
-        matches: list[
-            tuple[KeywordRule, str, str]
-        ] = []
-
-        for rule in self.rules:
-
-            if not rule.enabled:
-                continue
-
-            # ----------------------------------------------------------
-            # FILE NAME
-            # ----------------------------------------------------------
-
-            if rule.search_filename:
-
-                if self._contains_keyword(
-                    file_record.name,
-                    rule.keyword,
-                    rule.case_sensitive,
-                ):
-                    matches.append(
-                        (
-                            rule,
-                            file_record.name,
-                            self.MATCHED_IN_FILENAME,
-                        )
-                    )
-
-            # ----------------------------------------------------------
-            # DRIVE PATH
-            # ----------------------------------------------------------
-
-            if rule.search_path and folder_path:
-
-                if self._contains_keyword(
-                    folder_path,
-                    rule.keyword,
-                    rule.case_sensitive,
-                ):
-                    matches.append(
-                        (
-                            rule,
-                            folder_path,
-                            self.MATCHED_IN_PATH,
-                        )
-                    )
-
-        return matches
-
-    # ------------------------------------------------------------------
-    # DATABASE CLEANUP
-    # ------------------------------------------------------------------
-
-    def _clear_previous_matches(self) -> None:
-        """
-        Remove previous keyword matches for this repository.
-
-        This makes the operation repeatable.
-
-        Only matches belonging to files in the current repository
-        are removed.
-        """
-
-        if self.repository_id is None:
-            raise RuntimeError(
-                "Repository has not been initialized."
-            )
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                DELETE FROM drive_file_keyword_matches
-                WHERE drive_file_id_fk IN (
-                    SELECT id
-                    FROM drive_files
-                    WHERE repository_id = %s
-                )
-                """,
-                (self.repository_id,),
-            )
-
-    def _reset_file_keyword_state(self) -> None:
-        """
-        Reset previous keyword evaluation state.
-        """
-
-        if self.repository_id is None:
-            raise RuntimeError(
-                "Repository has not been initialized."
-            )
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE drive_files
-                SET
-                    is_relevant = false,
-                    relevance_reason = NULL,
-                    keyword_checked_at = NULL
-                WHERE repository_id = %s
-                  AND is_trashed = false
-                """,
-                (self.repository_id,),
-            )
-
-    # ------------------------------------------------------------------
-    # DATABASE MATCH INSERT
-    # ------------------------------------------------------------------
-
-    def _insert_match(
-        self,
-        file_record: DriveFileRecord,
-        rule: KeywordRule,
-        matched_text: str,
-        matched_in: str,
-    ) -> None:
-        """
-        Insert one keyword match.
-        """
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO drive_file_keyword_matches
-                (
-                    drive_file_id_fk,
-                    keyword_rule_id,
-                    matched_text,
-                    matched_in,
-                    matched_at
-                )
-                VALUES
-                (
-                    %s,
-                    %s,
-                    %s,
-                    %s,
-                    NOW()
-                )
-                ON CONFLICT
-                    (
-                        drive_file_id_fk,
-                        keyword_rule_id
-                    )
-                DO UPDATE SET
-                    matched_text = EXCLUDED.matched_text,
-                    matched_in = EXCLUDED.matched_in,
-                    matched_at = NOW()
-                """,
-                (
-                    file_record.id,
-                    rule.id,
-                    matched_text,
-                    matched_in,
-                ),
-            )
-
-    # ------------------------------------------------------------------
-    # FILE RESULT UPDATE
-    # ------------------------------------------------------------------
-
-    def _update_file_result(
-        self,
-        file_record: DriveFileRecord,
-        matches: list[
-            tuple[KeywordRule, str, str]
-        ],
-    ) -> None:
-        """
-        Update drive_files with the keyword result.
-        """
-
-        checked_at = datetime.now(
-            timezone.utc
+        query = self._build_full_text_query(
+            keyword
         )
 
-        if matches:
+        matched_ids: set[str] = set()
 
-            keyword_names: list[str] = []
-            locations: list[str] = []
+        page_token: str | None = None
 
-            for (
-                rule,
-                _matched_text,
-                matched_in,
-            ) in matches:
+        while True:
 
-                if rule.keyword not in keyword_names:
-                    keyword_names.append(
-                        rule.keyword
-                    )
-
-                if matched_in not in locations:
-                    locations.append(
-                        matched_in
-                    )
-
-            reason = (
-                "Keyword match: "
-                + ", ".join(keyword_names)
-                + " | matched in: "
-                + ", ".join(locations)
+            request = (
+                self.service
+                .files()
+                .list(
+                    q=query,
+                    spaces="drive",
+                    fields=self.FILE_FIELDS,
+                    pageSize=self.PAGE_SIZE,
+                    pageToken=page_token,
+                    supportsAllDrives=True,
+                    includeItemsFromAllDrives=True,
+                )
             )
 
-            is_relevant = True
+            response = request.execute()
 
-        else:
-
-            reason = (
-                "No enabled keyword matched "
-                "file name or Drive path."
+            files = response.get(
+                "files",
+                [],
             )
 
-            is_relevant = False
+            for metadata in files:
 
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE drive_files
-                SET
-                    is_relevant = %s,
-                    relevance_reason = %s,
-                    keyword_checked_at = %s,
-                    last_checked_at = %s,
-                    last_error = NULL
-                WHERE id = %s
-                """,
-                (
-                    is_relevant,
-                    reason,
-                    checked_at,
-                    checked_at,
-                    file_record.id,
+                if not isinstance(
+                    metadata,
+                    dict,
+                ):
+                    continue
+
+                file_id = metadata.get(
+                    "id"
+                )
+
+                if not file_id:
+                    continue
+
+                if metadata.get(
+                    "trashed",
+                    False,
+                ):
+                    continue
+
+                matched_ids.add(
+                    str(file_id)
+                )
+
+            page_token = response.get(
+                "nextPageToken"
+            )
+
+            if not page_token:
+                break
+
+        return matched_ids
+
+    # ------------------------------------------------------------------
+    # PostgreSQL update helpers
+    # ------------------------------------------------------------------
+
+    def _insert_content_match(
+        self,
+        cursor,
+        drive_file: DriveFileRecord,
+        rule: KeywordRule,
+    ) -> bool:
+        """
+        Register one content keyword match.
+
+        Returns True when the database operation returned a row.
+        """
+
+        cursor.execute(
+            """
+            INSERT INTO drive_file_keyword_matches
+            (
+                drive_file_id_fk,
+                keyword_rule_id,
+                matched_text,
+                matched_in
+            )
+            VALUES
+            (
+                %s,
+                %s,
+                %s,
+                %s
+            )
+            ON CONFLICT
+            (
+                drive_file_id_fk,
+                keyword_rule_id
+            )
+            DO UPDATE SET
+                matched_text = EXCLUDED.matched_text,
+                matched_in = EXCLUDED.matched_in,
+                matched_at = NOW()
+            RETURNING id
+            """,
+            (
+                drive_file.id,
+                rule.id,
+                rule.keyword,
+                "content",
+            ),
+        )
+
+        row = cursor.fetchone()
+
+        return row is not None
+
+    def _mark_file_relevant(
+        self,
+        cursor,
+        drive_file: DriveFileRecord,
+        keyword: str,
+    ) -> None:
+        """
+        Mark the Drive file as relevant because of content.
+        """
+
+        cursor.execute(
+            """
+            UPDATE drive_files
+            SET
+                is_relevant = TRUE,
+                relevance_reason = %s,
+                keyword_checked_at = NOW(),
+                last_checked_at = NOW()
+            WHERE id = %s
+            """,
+            (
+                f"CONTENT_KEYWORD:{keyword}",
+                drive_file.id,
+            ),
+        )
+
+    def _mark_file_checked_not_relevant(
+        self,
+        cursor,
+        drive_file: DriveFileRecord,
+    ) -> None:
+        """
+        Mark a candidate as checked and not relevant.
+        """
+
+        cursor.execute(
+            """
+            UPDATE drive_files
+            SET
+                is_relevant = FALSE,
+                relevance_reason = COALESCE(
+                    relevance_reason,
+                    'CONTENT_SEARCH_NO_MATCH'
                 ),
-            )
+                keyword_checked_at = NOW(),
+                last_checked_at = NOW()
+            WHERE id = %s
+              AND is_relevant IS DISTINCT FROM TRUE
+            """,
+            (
+                drive_file.id,
+            ),
+        )
 
     # ------------------------------------------------------------------
-    # RUN
+    # Main processing
     # ------------------------------------------------------------------
 
-    def run(self) -> dict[str, int]:
+    def run(self) -> dict[str, Any]:
         """
-        Run the complete metadata keyword filter.
+        Execute the complete content keyword search.
+
+        Returns a summary dictionary.
         """
 
-        self.initialize()
-
-        self._load_folder_cache()
-
-        files = self._load_files()
-
-        summary = {
-            "files": len(files),
-            "relevant": 0,
+        summary: dict[str, Any] = {
+            "repository": self.REPOSITORY_KEY,
+            "rule_set": "",
+            "rules": 0,
+            "candidate_files": 0,
+            "google_matches": 0,
+            "relevant_files": 0,
+            "content_matches": 0,
             "not_relevant": 0,
-            "matches": 0,
             "errors": 0,
+            "errors_detail": [],
         }
 
-        print()
-        print("=" * 72)
-        print(
-            "STARTING GOOGLE DRIVE METADATA KEYWORD FILTER"
-        )
-        print("=" * 72)
-
-        print(
-            f"[REPOSITORY] {self.repository_key}"
-        )
-
-        print(
-            f"[RULE SET]   {self.rule_set_name}"
-        )
-
-        print(
-            f"[RULES]      {len(self.rules)}"
-        )
-
-        print(
-            f"[FILES]      {len(files)}"
-        )
-
-        print()
-        print(
-            "[SEARCH]     filename + Drive path"
-        )
-        print(
-            "[DOWNLOAD]   NO"
-        )
-        print(
-            "[DRIVE WRITE] NO"
-        )
-        print()
+        database_connection = create_database_connection()
 
         try:
 
-            self._clear_previous_matches()
+            with database_connection.cursor() as cursor:
 
-            self._reset_file_keyword_state()
+                repository_id = self._get_repository_id(
+                    cursor
+                )
 
-            for index, file_record in enumerate(
-                files,
-                start=1,
-            ):
-
-                folder_path = (
-                    self._build_folder_path(
-                        file_record.parent_drive_file_id
+                rule_set_id, rule_set_name = (
+                    self._get_enabled_rule_set(
+                        cursor
                     )
                 )
 
-                matches = self._match_file(
-                    file_record,
-                    folder_path,
+                summary["rule_set"] = rule_set_name
+
+                rules = self._load_keyword_rules(
+                    cursor,
+                    rule_set_id,
                 )
 
-                try:
+                summary["rules"] = len(rules)
 
-                    for (
-                        rule,
-                        matched_text,
-                        matched_in,
-                    ) in matches:
+                candidates = self._load_candidate_files(
+                    cursor,
+                    repository_id,
+                )
 
-                        self._insert_match(
-                            file_record,
-                            rule,
-                            matched_text,
-                            matched_in,
+                summary["candidate_files"] = len(
+                    candidates
+                )
+
+                if not candidates:
+
+                    database_connection.commit()
+
+                    return summary
+
+                candidate_by_drive_id: dict[
+                    str,
+                    DriveFileRecord,
+                ] = {
+                    item.drive_file_id: item
+                    for item in candidates
+                }
+
+                candidate_drive_ids = set(
+                    candidate_by_drive_id.keys()
+                )
+
+                matched_file_ids_by_keyword: dict[
+                    int,
+                    set[str],
+                ] = {}
+
+                for rule in rules:
+
+                    try:
+
+                        print(
+                            "[CONTENT SEARCH] "
+                            f"{rule.keyword}"
                         )
 
-                    self._update_file_result(
-                        file_record,
-                        matches,
-                    )
-
-                    if matches:
-
-                        summary["relevant"] += 1
-
-                        summary["matches"] += (
-                            len(matches)
-                        )
-
-                        keywords = ", ".join(
-                            dict.fromkeys(
+                        google_ids = (
+                            self._search_google_drive(
                                 rule.keyword
-                                for (
-                                    rule,
-                                    _text,
-                                    _location,
-                                ) in matches
                             )
                         )
 
-                        print(
-                            f"[RELEVANT] "
-                            f"{index}/{len(files)} "
-                            f"{file_record.name}"
+                        matched_file_ids_by_keyword[
+                            rule.id
+                        ] = google_ids
+
+                        relevant_ids = (
+                            google_ids
+                            & candidate_drive_ids
                         )
 
                         print(
-                            f"            PATH: "
-                            f"{folder_path}"
+                            "[CONTENT RESULT] "
+                            f"{rule.keyword}: "
+                            f"{len(google_ids)} Google matches, "
+                            f"{len(relevant_ids)} Alcalay candidates"
                         )
-
-                        print(
-                            f"            KEYWORDS: "
-                            f"{keywords}"
-                        )
-
-                    else:
 
                         summary[
-                            "not_relevant"
+                            "google_matches"
+                        ] += len(relevant_ids)
+
+                        for drive_id in relevant_ids:
+
+                            drive_file = (
+                                candidate_by_drive_id[
+                                    drive_id
+                                ]
+                            )
+
+                            self._insert_content_match(
+                                cursor,
+                                drive_file,
+                                rule,
+                            )
+
+                            self._mark_file_relevant(
+                                cursor,
+                                drive_file,
+                                rule.keyword,
+                            )
+
+                            summary[
+                                "content_matches"
+                            ] += 1
+
+                    except Exception as exc:
+
+                        summary[
+                            "errors"
                         ] += 1
 
-                        print(
-                            f"[SKIP] "
-                            f"{index}/{len(files)} "
-                            f"{file_record.name}"
+                        detail = (
+                            f"keyword={rule.keyword}: "
+                            f"{type(exc).__name__}: {exc}"
                         )
 
-                except Exception as exc:
+                        summary[
+                            "errors_detail"
+                        ].append(
+                            detail
+                        )
 
-                    summary["errors"] += 1
+                        print(
+                            "[ERROR] "
+                            f"{detail}"
+                        )
 
-                    print(
-                        f"[ERROR] "
-                        f"{index}/{len(files)} "
-                        f"{file_record.name}: "
-                        f"{exc}"
+                relevant_drive_ids: set[str] = set()
+
+                for rule in rules:
+
+                    google_ids = (
+                        matched_file_ids_by_keyword.get(
+                            rule.id,
+                            set(),
+                        )
                     )
 
-                    raise
+                    relevant_drive_ids.update(
+                        google_ids
+                        & candidate_drive_ids
+                    )
 
-            self.connection.commit()
+                for drive_file in candidates:
+
+                    if (
+                        drive_file.drive_file_id
+                        in relevant_drive_ids
+                    ):
+                        continue
+
+                    self._mark_file_checked_not_relevant(
+                        cursor,
+                        drive_file,
+                    )
+
+                    summary[
+                        "not_relevant"
+                    ] += 1
+
+                database_connection.commit()
+
+                summary[
+                    "relevant_files"
+                ] = len(
+                    relevant_drive_ids
+                )
+
+                return summary
 
         except Exception:
 
-            self.connection.rollback()
+            database_connection.rollback()
 
             raise
 
+        finally:
+
+            database_connection.close()
+
+    # ------------------------------------------------------------------
+    # Console output
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def print_summary(
+        summary: dict[str, Any],
+    ) -> None:
+
         print()
         print("=" * 72)
         print(
-            "GOOGLE DRIVE METADATA KEYWORD FILTER COMPLETED"
+            "GOOGLE DRIVE CONTENT KEYWORD FILTER COMPLETED"
         )
         print("=" * 72)
 
         print(
-            f"[FILES]         "
-            f"{summary['files']}"
+            f"[REPOSITORY]       "
+            f"{summary.get('repository', '')}"
         )
 
         print(
-            f"[RELEVANT]      "
-            f"{summary['relevant']}"
+            f"[RULE SET]         "
+            f"{summary.get('rule_set', '')}"
         )
 
         print(
-            f"[NOT RELEVANT]  "
-            f"{summary['not_relevant']}"
+            f"[RULES]            "
+            f"{summary.get('rules', 0)}"
         )
 
         print(
-            f"[MATCHES]       "
-            f"{summary['matches']}"
+            f"[CANDIDATES]       "
+            f"{summary.get('candidate_files', 0)}"
         )
 
         print(
-            f"[ERRORS]        "
-            f"{summary['errors']}"
+            f"[GOOGLE MATCHES]   "
+            f"{summary.get('google_matches', 0)}"
+        )
+
+        print(
+            f"[RELEVANT FILES]   "
+            f"{summary.get('relevant_files', 0)}"
+        )
+
+        print(
+            f"[CONTENT MATCHES]  "
+            f"{summary.get('content_matches', 0)}"
+        )
+
+        print(
+            f"[NOT RELEVANT]     "
+            f"{summary.get('not_relevant', 0)}"
+        )
+
+        print(
+            f"[ERRORS]           "
+            f"{summary.get('errors', 0)}"
+        )
+
+        print(
+            "[DOWNLOAD]         NO"
+        )
+
+        print(
+            "[DRIVE WRITE]      NO"
         )
 
         print("=" * 72)
-        print()
 
-        return summary
-
-
-# ----------------------------------------------------------------------
-# DATABASE CONNECTION
-# ----------------------------------------------------------------------
-
-def create_database_connection():
-    """
-    Create PostgreSQL connection using the existing Alcalay
-    DatabaseConnection implementation.
-
-    The existing DatabaseConnection reads the password from:
-
-        ALCALAY_DB_PASSWORD
-    """
-
-    from src.database.connection import DatabaseConnection
-
-    database = DatabaseConnection()
-
-    return database.connect()
-
-
-# ----------------------------------------------------------------------
-# COMMAND LINE
-# ----------------------------------------------------------------------
-
-def parse_arguments() -> argparse.Namespace:
-    """
-    Parse command-line arguments.
-    """
-
-    parser = argparse.ArgumentParser(
-        description=(
-            "Alcalay Google Drive metadata keyword filter"
+        errors_detail = summary.get(
+            "errors_detail",
+            [],
         )
-    )
 
-    parser.add_argument(
-        "--repository",
-        default="alcalay",
-        help=(
-            "Drive repository key. "
-            "Default: alcalay"
-        ),
-    )
+        if errors_detail:
 
-    parser.add_argument(
-        "--rule-set",
-        default="default",
-        help=(
-            "Keyword rule set name. "
-            "Default: default"
-        ),
-    )
+            print()
+            print(
+                "ERROR DETAILS"
+            )
+            print("-" * 72)
 
-    return parser.parse_args()
+            for detail in errors_detail:
+                print(
+                    f"[ERROR] {detail}"
+                )
 
 
-# ----------------------------------------------------------------------
-# MAIN
-# ----------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def main() -> int:
     """
     Command-line entry point.
     """
 
-    args = parse_arguments()
-
-    connection = None
+    print()
+    print("=" * 72)
+    print(
+        "STARTING GOOGLE DRIVE CONTENT KEYWORD FILTER"
+    )
+    print("=" * 72)
 
     try:
 
-        connection = create_database_connection()
-
-        keyword_filter = DriveKeywordFilter(
-            connection=connection,
-            repository_key=args.repository,
-            rule_set_name=args.rule_set,
+        from src.drive.drive_connection import (
+            DriveConnection,
         )
 
-        keyword_filter.run()
+        connection = DriveConnection(
+            "frank.avner@gmail.com"
+        )
 
-        return 0
+        email = connection.connect()
 
-    except KeyboardInterrupt:
+        print(
+            f"[GOOGLE ACCOUNT] {email}"
+        )
+
+        print(
+            "[SEARCH]         Google Drive fullText"
+        )
+
+        print(
+            "[DOWNLOAD]       NO"
+        )
+
+        print(
+            "[DRIVE WRITE]    NO"
+        )
 
         print()
-        print(
-            "[STOPPED] User interrupted the operation."
+
+        content_filter = (
+            DriveContentKeywordFilter(
+                connection
+            )
         )
 
-        return 130
+        summary = content_filter.run()
+
+        content_filter.print_summary(
+            summary
+        )
+
+        if summary.get(
+            "errors",
+            0,
+        ):
+            return 1
+
+        return 0
 
     except Exception as exc:
 
         print()
-        print("=" * 72)
         print(
-            "GOOGLE DRIVE METADATA KEYWORD FILTER FAILED"
+            "GOOGLE DRIVE CONTENT KEYWORD FILTER FAILED"
         )
-        print("=" * 72)
+
         print(
-            f"[ERROR] {exc}"
+            f"[ERROR] {type(exc).__name__}: {exc}"
         )
-        print("=" * 72)
 
         return 1
 
-    finally:
-
-        if connection is not None:
-            connection.close()
-
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(
+        main()
+    )

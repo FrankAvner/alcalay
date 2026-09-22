@@ -54,11 +54,6 @@ DRIVE_DIR = PROJECT_ROOT / "config" / "drive"
 DRIVE_TOKENS_DIR = DRIVE_DIR / "tokens"
 
 
-# Read-only access to Google Drive.
-#
-# This scope is intentionally read-only.
-# It allows metadata access and reading/exporting file content,
-# but does not allow Drive modifications.
 SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly"
 ]
@@ -373,7 +368,7 @@ class DriveConnection:
                 "Google Drive עדיין לא מחובר."
             )
 
-        results: dict[str, dict[str, Any]]] = {}
+        results: dict[str, dict[str, Any]] = {}
 
         for key, display_name in REQUIRED_FOLDERS.items():
 
