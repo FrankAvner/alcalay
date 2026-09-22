@@ -12,16 +12,18 @@ Responsibilities:
     - Keep a separate OAuth token for Drive.
     - Read the Alcalay Drive repository configuration.
     - Verify access to the configured Alcalay folders.
+    - Allow read-only access to Drive file content for future
+      content-based keyword searching and export.
 
 This module does NOT:
     - Upload files.
-    - Download files.
     - Delete files.
     - Move files.
     - Rename files.
     - Synchronize files.
     - Modify PostgreSQL.
     - Index documents.
+    - Decide which files are relevant.
 """
 
 from __future__ import annotations
@@ -52,8 +54,13 @@ DRIVE_DIR = PROJECT_ROOT / "config" / "drive"
 DRIVE_TOKENS_DIR = DRIVE_DIR / "tokens"
 
 
+# Read-only access to Google Drive.
+#
+# This scope is intentionally read-only.
+# It allows metadata access and reading/exporting file content,
+# but does not allow Drive modifications.
 SCOPES = [
-    "https://www.googleapis.com/auth/drive.metadata.readonly"
+    "https://www.googleapis.com/auth/drive.readonly"
 ]
 
 
@@ -160,7 +167,15 @@ class DriveConnection:
     """
     Handles authenticated access to Google Drive.
 
-    This class provides read-only metadata access.
+    The connection is read-only.
+
+    The read-only Drive scope allows the application to:
+        - Read file metadata.
+        - Search Drive.
+        - Search indexed file content.
+        - Read/export file content when required.
+
+    The connection does not provide write access to Drive.
     """
 
     def __init__(
@@ -358,7 +373,7 @@ class DriveConnection:
                 "Google Drive עדיין לא מחובר."
             )
 
-        results: dict[str, dict[str, Any]] = {}
+        results: dict[str, dict[str, Any]]] = {}
 
         for key, display_name in REQUIRED_FOLDERS.items():
 
