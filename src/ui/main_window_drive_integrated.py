@@ -1535,6 +1535,7 @@ class DriveSyncWindow(QDialog):
         self.setMinimumSize(1000, 760)
 
         self.process = None
+        self.auth_process = None
         self.stdout_buffer = ""
         self.stopping = False
         self.started = False
@@ -1696,6 +1697,11 @@ class DriveSyncWindow(QDialog):
 
         button_row.addStretch()
 
+        self.reconnect_button = QPushButton("התחבר מחדש ל-Google Drive")
+        self.reconnect_button.clicked.connect(self.reconnect_drive)
+        self.reconnect_button.setEnabled(True)
+        button_row.addWidget(self.reconnect_button)
+
         self.close_button = QPushButton("סגור")
         self.close_button.clicked.connect(self.close)
         button_row.addWidget(self.close_button)
@@ -1817,7 +1823,10 @@ class DriveSyncWindow(QDialog):
             self.table.item(row, 5).setText(f"{conflicts + errors:,}")
 
     def _update_from_event(self, payload):
-        event = payload.get("event")
+        event = str(payload.get("event") or "").strip()
+        event_upper = event.upper()
+        event_lower = event.lower()
+
         summary = payload.get("summary") or {}
         by_type = payload.get("by_type") or {}
         direction = payload.get("direction") or (
@@ -1826,8 +1835,27 @@ class DriveSyncWindow(QDialog):
             else DIRECTION_LOCAL_TO_DRIVE
         )
 
-        if event == "started":
-            total = int(payload.get("candidates") or 0)
+        # The worker has used more than one event naming convention while
+        # the synchronization protocol was being developed. Normalize the
+        # known names here so the GUI remains compatible with both forms.
+        if event_lower == "run_start":
+            total = int(payload.get("candidates") or payload.get("count") or 0)
+            self.last_progress_total = total
+            self.last_progress_index = 0
+            self.progress.setRange(0, max(total, 1))
+            self.progress.setValue(0)
+            self.progress_detail_label.setText(
+                f"התקדמות: 0 / {total:,}"
+            )
+            self.status_label.setText(
+                f"הסנכרון התחיל — {total:,} מועמדים."
+            )
+            self._log_activity(
+                f"RUN START | כיוון={direction} | מועמדים={total:,}"
+            )
+
+        elif event_lower in ("started", "start"):
+            total = int(payload.get("candidates") or payload.get("count") or 0)
             self.last_progress_total = total
             self.last_progress_index = 0
             self.progress.setRange(0, max(total, 1))
@@ -1842,39 +1870,99 @@ class DriveSyncWindow(QDialog):
                 f"STARTED | כיוון={direction} | מועמדים={total:,}"
             )
 
-        elif event == "item_start":
-            index = int(payload.get("index") or 0)
-            total = int(payload.get("total") or 0)
-            name = str(payload.get("name") or "")
-            kind = str(payload.get("kind") or "OTHER")
-            self.current_name = name
-            self.current_kind = kind
-            self.last_progress_total = total
-            self.progress_detail_label.setText(
-                f"התקדמות: {index - 1:,} / {total:,}"
-            )
+        elif event_lower == "repository":
+            repository_id = payload.get("repository_id", "-")
+            root_folder_id = payload.get("root_folder_id", "-")
+            self.status_label.setText("Repository של Google Drive אותר.")
             self.current_operation_label.setText(
-                f"פעולה נוכחית: {index:,}/{total:,} | {kind} | {name}"
-            )
-            self.status_label.setText(
-                f"מעבד פריט {index:,}/{total:,}"
+                f"Repository: {repository_id} | Root: {root_folder_id}"
             )
             self._log_activity(
-                f"ITEM START | {index:,}/{total:,} | {kind} | {name}"
+                f"REPOSITORY | id={repository_id} | root={root_folder_id}"
             )
 
-        elif event == "item_done":
+        elif event_lower in ("drive_connected", "connected"):
+            email = str(payload.get("email") or "")
+            self.status_label.setText(
+                "מחובר ל-Google Drive"
+                + (f": {email}" if email else ".")
+            )
+            self.current_operation_label.setText(
+                "פעולה נוכחית: חיבור Google Drive תקין"
+            )
+            self._log_activity(
+                "DRIVE CONNECTED"
+                + (f" | {email}" if email else "")
+            )
+
+        elif event_lower == "candidates":
+            total = int(payload.get("count") or payload.get("candidates") or 0)
+            self.last_progress_total = total
+            self.progress.setRange(0, max(total, 1))
+            self.progress.setValue(0)
+            self.progress_detail_label.setText(
+                f"התקדמות: 0 / {total:,}"
+            )
+            self.status_label.setText(
+                f"נמצאו {total:,} מועמדים לסנכרון."
+            )
+            self._log_activity(
+                f"CANDIDATES | {total:,} מועמדים"
+            )
+
+        elif event_lower in ("item_start", "upload_start", "download_start"):
             index = int(payload.get("index") or 0)
-            total = int(payload.get("total") or 0)
+            total = int(payload.get("total") or self.last_progress_total or 0)
             name = str(payload.get("name") or "")
-            kind = str(payload.get("kind") or "OTHER")
+            kind = str(payload.get("kind") or self._guess_kind(name))
+            action = str(payload.get("action") or event_upper)
+            local_path = str(payload.get("local_path") or "")
+
+            self.current_name = name
+            self.current_kind = kind
+            self.current_action = action
+            self.last_progress_total = total
+
+            if event_lower == "item_start" and index > 0:
+                self.progress_detail_label.setText(
+                    f"התקדמות: {max(index - 1, 0):,} / {total:,}"
+                )
+                self.current_operation_label.setText(
+                    f"פעולה נוכחית: {index:,}/{total:,} | {kind} | {name}"
+                )
+                self.status_label.setText(
+                    f"מעבד פריט {index:,}/{total:,}"
+                )
+                self._log_activity(
+                    f"ITEM START | {index:,}/{total:,} | {kind} | {name}"
+                )
+            else:
+                self.current_operation_label.setText(
+                    f"פעולה נוכחית: {action} | {kind} | {name}"
+                )
+                self.status_label.setText(
+                    f"{action} | {name}"
+                )
+                self._log_activity(
+                    f"{event_upper} | {kind} | {name}"
+                    + (f" | {local_path}" if local_path else "")
+                )
+
+        elif event_lower == "item_done":
+            index = int(payload.get("index") or 0)
+            total = int(payload.get("total") or self.last_progress_total or 0)
+            name = str(payload.get("name") or "")
+            kind = str(payload.get("kind") or self._guess_kind(name))
             action = str(payload.get("action") or "")
             message = str(payload.get("message") or "")
+
             self.last_progress_index = index
             self.last_progress_total = total
+
             if total > 0:
                 self.progress.setRange(0, total)
                 self.progress.setValue(min(index, total))
+
             self.progress_detail_label.setText(
                 f"התקדמות: {index:,} / {total:,}"
             )
@@ -1887,10 +1975,66 @@ class DriveSyncWindow(QDialog):
             self.current_action = action
             self._log_activity(
                 f"ITEM DONE | {index:,}/{total:,} | {action} | {kind} | "
-                f"{name} | {message}"
+                f"{name}"
+                + (f" | {message}" if message else "")
             )
 
-        elif event == "stop_requested":
+        elif event_lower in ("item_error", "error"):
+            name = str(payload.get("name") or self.current_name or "")
+            error = str(
+                payload.get("error")
+                or payload.get("message")
+                or "שגיאה לא ידועה"
+            )
+            self.status_label.setText(
+                f"שגיאה בפריט: {name}" if name else "שגיאה בפריט"
+            )
+            self.current_operation_label.setText(
+                f"שגיאה: {error}"
+            )
+            self._log_activity(
+                f"ITEM ERROR | {name} | {error}"
+            )
+
+        elif event_lower in ("auth_error", "authentication_error", "permission_error"):
+            message = str(
+                payload.get("message")
+                or payload.get("error")
+                or "אין הרשאות - נא להתחבר עם יוזר מורשה"
+            )
+            if "אין הרשאות" not in message:
+                message = "אין הרשאות - נא להתחבר עם יוזר מורשה"
+
+            self.status_label.setText(message)
+            self.current_operation_label.setText(
+                "Google Drive דורש התחברות מחדש עם הרשאות כתיבה."
+            )
+            self._log_activity(
+                "AUTH ERROR | " + message
+            )
+            self.reconnect_button.setEnabled(True)
+
+            QMessageBox.warning(
+                self,
+                "הרשאות Google Drive",
+                message
+                + "\n\n"
+                "לחץ על 'התחבר מחדש ל-Google Drive' בחלון זה "
+                "כדי לבצע OAuth מחדש.",
+            )
+
+        elif event_lower in ("upload_success", "download_success"):
+            name = str(payload.get("name") or self.current_name or "")
+            message = str(payload.get("message") or "")
+            self.status_label.setText(
+                f"העברה הסתיימה: {name}"
+            )
+            self._log_activity(
+                f"{event_upper} | {name}"
+                + (f" | {message}" if message else "")
+            )
+
+        elif event_lower in ("stop_requested", "stop"):
             self.status_label.setText(
                 "בקשת עצירה התקבלה — עוצר את תהליך הסנכרון..."
             )
@@ -1898,15 +2042,21 @@ class DriveSyncWindow(QDialog):
                 "STOP REQUESTED | התקבלה בקשת עצירה מהמשתמש"
             )
 
-        elif event == "finished":
+        elif event_lower in ("finished", "run_finished", "run_finish"):
             status = str(payload.get("status") or "UNKNOWN")
             self.status_label.setText(
                 f"הסנכרון הסתיים: {status}"
             )
-            self._log_activity(f"FINISHED | status={status}")
+            self._log_activity(
+                f"FINISHED | status={status}"
+            )
 
-        elif event == "fatal_error":
-            message = str(payload.get("message") or "")
+        elif event_lower in ("fatal_error", "run_error"):
+            message = str(
+                payload.get("message")
+                or payload.get("error")
+                or "שגיאה לא ידועה"
+            )
             self.status_label.setText(
                 "סנכרון נכשל: " + message
             )
@@ -1914,42 +2064,95 @@ class DriveSyncWindow(QDialog):
                 f"FATAL ERROR | {message}"
             )
 
+        else:
+            # Never silently discard a valid JSON event. This is important
+            # because drive_sync.py can emit diagnostic events that are not
+            # needed for progress calculations but are essential for the
+            # live activity log and for troubleshooting permissions.
+            details = []
+            for key in (
+                "message",
+                "name",
+                "error",
+                "local_path",
+                "action",
+                "direction",
+                "email",
+                "count",
+                "candidates",
+            ):
+                value = payload.get(key)
+                if value not in (None, ""):
+                    details.append(f"{key}={value}")
+
+            self._log_activity(
+                event_upper
+                + (" | " + " | ".join(details) if details else "")
+            )
+
         self._update_summary(summary)
         self._update_table(by_type, direction)
         self._update_timing()
 
+    @staticmethod
+    def _guess_kind(name):
+        value = str(name or "").lower()
+        if value.endswith(".pdf"):
+            return "PDF"
+        if value.endswith((".doc", ".docx", ".odt", ".rtf")):
+            return "WORD / OFFICE"
+        if value.endswith((".xls", ".xlsx", ".xlsm", ".csv")):
+            return "EXCEL"
+        if value.endswith((".ppt", ".pptx")):
+            return "POWERPOINT"
+        if value.endswith((".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff")):
+            return "IMAGES"
+        return "OTHER"
+
     def _process_event_line(self, line):
         if not line.startswith("[SYNC_EVENT] "):
             return False
+
         raw = line[len("[SYNC_EVENT] "):].strip()
         try:
             import json
             payload = json.loads(raw)
-        except Exception:
-            return False
+        except Exception as exc:
+            self._log_activity(
+                f"INVALID SYNC EVENT | {exc} | {raw}"
+            )
+            return True
+
         self._update_from_event(payload)
         return True
 
     def _read_stdout(self):
         if self.process is None:
             return
+
         data = bytes(self.process.readAllStandardOutput())
         if not data:
             return
+
         text = data.decode("utf-8", errors="replace")
         self.stdout_buffer += text
+
         while "\n" in self.stdout_buffer:
             line, self.stdout_buffer = self.stdout_buffer.split("\n", 1)
             line = line.rstrip("\r")
-            if not self._process_event_line(line):
-                self._append_output(line + "\n")
+            if line:
+                if not self._process_event_line(line):
+                    self._append_output(line + "\n")
+                    self._log_activity(line)
 
     def _read_stderr(self):
         if self.process is None:
             return
+
         data = bytes(self.process.readAllStandardError())
         if not data:
             return
+
         text = data.decode("utf-8", errors="replace")
         self._append_output(text)
         self._log_activity("STDERR | " + text.rstrip())
@@ -2031,6 +2234,117 @@ class DriveSyncWindow(QDialog):
         if not self.process.waitForStarted(5000):
             self._process_error(QProcess.ProcessError.FailedToStart)
 
+    def reconnect_drive(self):
+        if self.auth_process is not None and self.auth_process.state() != QProcess.ProcessState.NotRunning:
+            return
+
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            self._log_activity("AUTH RECONNECT | עוצר את סנכרון Drive לפני התחברות מחדש")
+            self.stop()
+            if not self.process.waitForFinished(5500):
+                self.process.kill()
+                self.process.waitForFinished(1500)
+
+        self.reconnect_button.setEnabled(False)
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        self.close_button.setEnabled(False)
+        self.status_label.setText("פותח התחברות מחדש ל-Google Drive...")
+        self.current_operation_label.setText(
+            "פעולה נוכחית: OAuth — יש להשלים את ההתחברות בדפדפן."
+        )
+        self._log_activity(
+            "AUTH RECONNECT | מתחיל OAuth מחדש מתוך חלון Alcalay"
+        )
+
+        token_path = PROJECT_ROOT / "config" / "drive" / "tokens" / f"{DEFAULT_GMAIL_ACCOUNT}.json"
+        script = (
+            "from pathlib import Path; "
+            "token=Path(r" + repr(str(token_path)) + "); "
+            "token.unlink(missing_ok=True); "
+            "from src.drive.drive_connection import DriveConnection; "
+            "print('[AUTH] מתחיל התחברות מחדש ל-Google Drive', flush=True); "
+            "email=DriveConnection(account_email=" + repr(DEFAULT_GMAIL_ACCOUNT) + ").connect(); "
+            "print('[AUTH] התחברות הושלמה: ' + str(email), flush=True)"
+        )
+
+        self.auth_process = QProcess(self)
+        self.auth_process.setProcessEnvironment(
+            self._create_process_environment(DIRECTION_LOCAL_TO_DRIVE)
+        )
+        self.auth_process.setWorkingDirectory(str(PROJECT_ROOT))
+        self.auth_process.setProgram(sys.executable)
+        self.auth_process.setArguments(["-u", "-c", script])
+        self.auth_process.readyReadStandardOutput.connect(self._read_auth_stdout)
+        self.auth_process.readyReadStandardError.connect(self._read_auth_stderr)
+        self.auth_process.errorOccurred.connect(self._auth_process_error)
+        self.auth_process.finished.connect(self._auth_process_finished)
+        self.auth_process.start()
+
+        if not self.auth_process.waitForStarted(5000):
+            self._auth_process_error(QProcess.ProcessError.FailedToStart)
+
+    def _read_auth_stdout(self):
+        if self.auth_process is None:
+            return
+        data = bytes(self.auth_process.readAllStandardOutput())
+        if not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        self._append_output(text)
+        for line in text.splitlines():
+            if line.strip():
+                self._log_activity(line.strip())
+
+    def _read_auth_stderr(self):
+        if self.auth_process is None:
+            return
+        data = bytes(self.auth_process.readAllStandardError())
+        if not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        self._append_output(text)
+        for line in text.splitlines():
+            if line.strip():
+                self._log_activity("AUTH STDERR | " + line.strip())
+
+    def _auth_process_error(self, error):
+        message = (
+            "לא ניתן להפעיל את תהליך ההתחברות ל-Google Drive."
+            if error == QProcess.ProcessError.FailedToStart
+            else f"שגיאת QProcess בהתחברות: {error}"
+        )
+        self.status_label.setText(message)
+        self._log_activity("AUTH ERROR | " + message)
+        self.reconnect_button.setEnabled(True)
+        self.start_button.setEnabled(True)
+        self.close_button.setEnabled(True)
+
+    def _auth_process_finished(self, exit_code, exit_status):
+        if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            self.status_label.setText(
+                "התחברות ל-Google Drive הושלמה. אפשר להפעיל את הסנכרון מחדש."
+            )
+            self.current_operation_label.setText(
+                "פעולה נוכחית: Google Drive מחובר עם הרשאות מלאות."
+            )
+            self._log_activity(
+                "AUTH SUCCESS | התחברות Google Drive הושלמה בהצלחה"
+            )
+        else:
+            self.status_label.setText(
+                f"התחברות Google Drive נכשלה. קוד: {exit_code}"
+            )
+            self._log_activity(
+                f"AUTH FAILED | exit_code={exit_code}"
+            )
+
+        self.reconnect_button.setEnabled(True)
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.close_button.setEnabled(True)
+        self.auth_process = None
+
     def stop(self):
         if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
             return
@@ -2053,7 +2367,6 @@ class DriveSyncWindow(QDialog):
         try:
             self.process.write(b"STOP\n")
             self.process.waitForBytesWritten(1000)
-            self.process.flush()
         except Exception as exc:
             self._log_activity(
                 f"STOP WRITE ERROR | {type(exc).__name__}: {exc}"
@@ -2148,6 +2461,13 @@ class DriveSyncWindow(QDialog):
             if not self.process.waitForFinished(5500):
                 self.process.kill()
                 self.process.waitForFinished(1500)
+
+        if self.auth_process is not None and self.auth_process.state() != QProcess.ProcessState.NotRunning:
+            self.auth_process.terminate()
+            if not self.auth_process.waitForFinished(1500):
+                self.auth_process.kill()
+                self.auth_process.waitForFinished(1000)
+
         self.elapsed_timer.stop()
         event.accept()
 

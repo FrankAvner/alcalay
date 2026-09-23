@@ -1,0 +1,699 @@
+```python
+# -*- coding: utf-8 -*-
+
+"""
+Alcalay - Gmail selected labels size check
+
+בדיקה בלבד.
+
+המטרה:
+1. לקרוא מ-PostgreSQL את תגיות Gmail שנבחרו:
+       selected_for_sync = TRUE
+       enabled = TRUE
+
+2. להתחבר לחשבון Gmail:
+       frank.avner@gmail.com
+
+3. עבור כל תגית:
+       - לקבל את מספר המיילים
+       - לקרוא את ה-message IDs
+       - לקרוא את sizeEstimate של כל מייל
+
+4. למנוע ספירה כפולה:
+       אם אותו מייל נמצא ביותר מתגית אחת,
+       הוא ייספר פעם אחת בלבד בסיכום הכולל.
+
+5. להציג:
+       - מספר מיילים בכל תגית
+       - נפח משוער של כל תגית
+       - מספר מיילים ייחודיים
+       - נפח ייחודי כולל
+       - חפיפה בין תגיות
+
+חשוב:
+- לא מורידים מיילים.
+- לא שומרים מיילים.
+- לא יוצרים קבצים.
+- לא משנים Gmail.
+- לא משנים Google Drive.
+- לא משנים PostgreSQL.
+- אין COPY.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Project path
+# ---------------------------------------------------------------------------
+
+CURRENT_FILE = Path(__file__).resolve()
+PROJECT_ROOT = CURRENT_FILE.parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ---------------------------------------------------------------------------
+# Alcalay imports
+# ---------------------------------------------------------------------------
+
+from src.database.connection import DatabaseConnection
+from src.gmail.gmail_connection import GmailConnection
+
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_ACCOUNT = "frank.avner@gmail.com"
+
+GMAIL_PAGE_SIZE = 500
+
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
+
+def format_bytes(value: int) -> str:
+    """
+    Convert bytes to a readable GB / MB / KB value.
+    """
+
+    value = int(value or 0)
+
+    if value >= 1024 ** 3:
+        return f"{value / (1024 ** 3):.2f} GB"
+
+    if value >= 1024 ** 2:
+        return f"{value / (1024 ** 2):.2f} MB"
+
+    if value >= 1024:
+        return f"{value / 1024:.2f} KB"
+
+    return f"{value:,} B"
+
+
+def format_number(value: int) -> str:
+    return f"{int(value):,}"
+
+
+# ---------------------------------------------------------------------------
+# Database
+# ---------------------------------------------------------------------------
+
+def get_database_connection():
+    return DatabaseConnection().connect()
+
+
+def get_gmail_account_id(
+    connection,
+    account_email: str,
+) -> int:
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id
+            FROM gmail_accounts
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (account_email,),
+        )
+
+        row = cursor.fetchone()
+
+    if not row:
+        raise RuntimeError(
+            "Gmail account was not found in PostgreSQL: "
+            + account_email
+        )
+
+    return int(row[0])
+
+
+def load_selected_labels(
+    connection,
+    gmail_account_id: int,
+) -> list[dict[str, Any]]:
+
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT
+                id,
+                label_id,
+                label_name,
+                selected_for_sync,
+                enabled
+            FROM gmail_labels
+            WHERE gmail_account_id = %s
+              AND selected_for_sync = TRUE
+              AND enabled = TRUE
+            ORDER BY id
+            """,
+            (gmail_account_id,),
+        )
+
+        rows = cursor.fetchall()
+
+    return [
+        {
+            "db_id": row[0],
+            "label_id": row[1],
+            "label_name": row[2],
+            "selected_for_sync": bool(row[3]),
+            "enabled": bool(row[4]),
+        }
+        for row in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Gmail
+# ---------------------------------------------------------------------------
+
+def connect_gmail(account_email: str):
+
+    connection = GmailConnection(account_email)
+
+    result = connection.connect(account_email)
+
+    if result is False:
+        raise RuntimeError(
+            "Gmail connection failed."
+        )
+
+    service = connection.service
+
+    if service is None:
+        raise RuntimeError(
+            "Gmail service was not created."
+        )
+
+    return service
+
+
+def get_label_statistics(
+    service,
+    label_id: str,
+) -> dict[str, Any]:
+    """
+    Read one Gmail label.
+
+    This function does not download message bodies or attachments.
+
+    Gmail messages.list() returns only message IDs/thread IDs.
+    messages.get(format='minimal') returns metadata including
+    sizeEstimate.
+
+    Returns:
+        {
+            "message_ids": set(...),
+            "message_count": int,
+            "size_bytes": int,
+        }
+    """
+
+    message_ids: set[str] = set()
+
+    page_token = None
+
+    while True:
+
+        request = (
+            service.users()
+            .messages()
+            .list(
+                userId="me",
+                labelIds=[label_id],
+                maxResults=GMAIL_PAGE_SIZE,
+                pageToken=page_token,
+            )
+        )
+
+        response = request.execute()
+
+        messages = response.get("messages", [])
+
+        for message in messages:
+
+            message_id = message.get("id")
+
+            if message_id:
+                message_ids.add(message_id)
+
+        page_token = response.get("nextPageToken")
+
+        if not page_token:
+            break
+
+    total_size = 0
+
+    for index, message_id in enumerate(
+        sorted(message_ids),
+        1,
+    ):
+
+        message = (
+            service.users()
+            .messages()
+            .get(
+                userId="me",
+                id=message_id,
+                format="minimal",
+            )
+            .execute()
+        )
+
+        total_size += int(
+            message.get(
+                "sizeEstimate",
+                0,
+            )
+            or 0
+        )
+
+        if index % 500 == 0:
+            print(
+                f"      נקראו {index:,} מיילים...",
+                flush=True,
+            )
+
+    return {
+        "message_ids": message_ids,
+        "message_count": len(message_ids),
+        "size_bytes": total_size,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main check
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+
+    print()
+    print("=" * 78)
+    print("Alcalay - בדיקת נפח תגיות Gmail")
+    print("=" * 78)
+    print()
+    print("חשבון Gmail:")
+    print(f"  {DEFAULT_ACCOUNT}")
+    print()
+    print("מצב:")
+    print("  בדיקה בלבד")
+    print("  אין COPY")
+    print("  אין הורדה")
+    print("  אין שינוי ב-Gmail")
+    print("  אין שינוי ב-Google Drive")
+    print("  אין שינוי ב-PostgreSQL")
+    print()
+
+    db = None
+
+    try:
+
+        # ---------------------------------------------------------------
+        # PostgreSQL
+        # ---------------------------------------------------------------
+
+        print("1. קורא את התגיות שנבחרו מ-PostgreSQL...")
+
+        db = get_database_connection()
+
+        gmail_account_id = get_gmail_account_id(
+            db,
+            DEFAULT_ACCOUNT,
+        )
+
+        labels = load_selected_labels(
+            db,
+            gmail_account_id,
+        )
+
+        print(
+            f"   נמצאו {len(labels)} תגיות פעילות שנבחרו."
+        )
+        print()
+
+        if not labels:
+
+            print(
+                "לא נמצאו תגיות עם "
+                "selected_for_sync = TRUE "
+                "ו-enabled = TRUE."
+            )
+
+            return 1
+
+        # ---------------------------------------------------------------
+        # Gmail connection
+        # ---------------------------------------------------------------
+
+        print("2. מתחבר ל-Gmail...")
+
+        service = connect_gmail(
+            DEFAULT_ACCOUNT,
+        )
+
+        print("   החיבור ל-Gmail הצליח.")
+        print()
+
+        # ---------------------------------------------------------------
+        # Statistics
+        # ---------------------------------------------------------------
+
+        all_unique_message_ids: set[str] = set()
+
+        label_results: list[dict[str, Any]] = []
+
+        total_label_message_count = 0
+        total_label_size = 0
+
+        # ---------------------------------------------------------------
+        # Each selected label
+        # ---------------------------------------------------------------
+
+        for index, label in enumerate(
+            labels,
+            1,
+        ):
+
+            label_name = label["label_name"]
+            label_id = label["label_id"]
+
+            print(
+                f"[{index}/{len(labels)}] {label_name}"
+            )
+
+            print(
+                f"    Gmail label ID: {label_id}"
+            )
+
+            try:
+
+                result = get_label_statistics(
+                    service,
+                    label_id,
+                )
+
+                message_ids = result[
+                    "message_ids"
+                ]
+
+                message_count = result[
+                    "message_count"
+                ]
+
+                size_bytes = result[
+                    "size_bytes"
+                ]
+
+                all_unique_message_ids.update(
+                    message_ids
+                )
+
+                total_label_message_count += (
+                    message_count
+                )
+
+                total_label_size += (
+                    size_bytes
+                )
+
+                label_results.append(
+                    {
+                        "label_name": label_name,
+                        "label_id": label_id,
+                        "message_ids": message_ids,
+                        "message_count": message_count,
+                        "size_bytes": size_bytes,
+                    }
+                )
+
+                print(
+                    "    מיילים: "
+                    f"{format_number(message_count)}"
+                )
+
+                print(
+                    "    נפח משוער: "
+                    f"{format_bytes(size_bytes)}"
+                )
+
+                print()
+
+            except Exception as exc:
+
+                print(
+                    f"    שגיאה: {exc}"
+                )
+                print()
+
+        # ---------------------------------------------------------------
+        # Calculate unique messages
+        # ---------------------------------------------------------------
+
+        print("=" * 78)
+        print("תוצאות")
+        print("=" * 78)
+        print()
+
+        print(
+            "מספר תגיות שנבדקו: "
+            f"{len(labels):,}"
+        )
+
+        print()
+
+        print(
+            "פירוט לפי תגית:"
+        )
+
+        print(
+            "-" * 78
+        )
+
+        for result in label_results:
+
+            print(
+                f"{result['label_name']}"
+            )
+
+            print(
+                f"    מיילים: "
+                f"{format_number(result['message_count'])}"
+            )
+
+            print(
+                f"    נפח: "
+                f"{format_bytes(result['size_bytes'])}"
+            )
+
+        print()
+        print(
+            "-" * 78
+        )
+
+        # ---------------------------------------------------------------
+        # Per-label sum
+        # ---------------------------------------------------------------
+
+        print(
+            "סכום לפי תגיות:"
+        )
+
+        print(
+            f"    מיילים: "
+            f"{format_number(total_label_message_count)}"
+        )
+
+        print(
+            f"    נפח: "
+            f"{format_bytes(total_label_size)}"
+        )
+
+        print()
+
+        # ---------------------------------------------------------------
+        # Unique message calculation
+        #
+        # We have the unique IDs but need the size of each unique
+        # message. We calculate this separately.
+        # ---------------------------------------------------------------
+
+        print(
+            "מחשב נפח ייחודי ללא כפילות בין תגיות..."
+        )
+
+        unique_size = 0
+
+        for index, message_id in enumerate(
+            sorted(all_unique_message_ids),
+            1,
+        ):
+
+            message = (
+                service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=message_id,
+                    format="minimal",
+                )
+                .execute()
+            )
+
+            unique_size += int(
+                message.get(
+                    "sizeEstimate",
+                    0,
+                )
+                or 0
+            )
+
+            if index % 500 == 0:
+                print(
+                    f"    {index:,} / "
+                    f"{len(all_unique_message_ids):,}",
+                    flush=True,
+                )
+
+        print()
+
+        # ---------------------------------------------------------------
+        # Overlap
+        # ---------------------------------------------------------------
+
+        duplicate_message_count = (
+            total_label_message_count
+            - len(all_unique_message_ids)
+        )
+
+        duplicate_size = (
+            total_label_size
+            - unique_size
+        )
+
+        # ---------------------------------------------------------------
+        # Final result
+        # ---------------------------------------------------------------
+
+        print("=" * 78)
+        print("סיכום סופי")
+        print("=" * 78)
+        print()
+
+        print(
+            "סה\"כ מיילים לפי סכום 14 התגיות:"
+        )
+
+        print(
+            f"  {format_number(total_label_message_count)}"
+        )
+
+        print()
+
+        print(
+            "סה\"כ נפח לפי סכום 14 התגיות:"
+        )
+
+        print(
+            f"  {format_bytes(total_label_size)}"
+        )
+
+        print()
+
+        print(
+            "מיילים ייחודיים:"
+        )
+
+        print(
+            f"  {format_number(len(all_unique_message_ids))}"
+        )
+
+        print()
+
+        print(
+            "נפח ייחודי אמיתי:"
+        )
+
+        print(
+            f"  {format_bytes(unique_size)}"
+        )
+
+        print()
+
+        print(
+            "מיילים שחוזרים ביותר מתגית אחת:"
+        )
+
+        print(
+            f"  {format_number(duplicate_message_count)}"
+        )
+
+        print()
+
+        print(
+            "נפח שנמצא ביותר מתגית אחת:"
+        )
+
+        print(
+            f"  {format_bytes(duplicate_size)}"
+        )
+
+        print()
+
+        print("=" * 78)
+        print(
+            "זהו אומדן לפי Gmail sizeEstimate."
+        )
+        print(
+            "לא הורד אף מייל ולא בוצע שום COPY."
+        )
+        print("=" * 78)
+        print()
+
+        return 0
+
+    except KeyboardInterrupt:
+
+        print()
+        print("הבדיקה הופסקה על ידי המשתמש.")
+        return 130
+
+    except Exception as exc:
+
+        print()
+        print("=" * 78)
+        print("שגיאה")
+        print("=" * 78)
+        print()
+        print(str(exc))
+        print()
+
+        return 1
+
+    finally:
+
+        if db is not None:
+            try:
+                db.close()
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    raise SystemExit(
+        main()
+    )
