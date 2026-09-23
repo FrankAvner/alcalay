@@ -12,11 +12,9 @@ Responsibilities:
     - Keep a separate OAuth token for Drive.
     - Read the Alcalay Drive repository configuration.
     - Verify access to the configured Alcalay folders.
-    - Allow read-only access to Drive file content for future
-      content-based keyword searching and export.
+    - Allow read/write access required by Drive synchronization.
 
 This module does NOT:
-    - Upload files.
     - Delete files.
     - Move files.
     - Rename files.
@@ -24,6 +22,10 @@ This module does NOT:
     - Modify PostgreSQL.
     - Index documents.
     - Decide which files are relevant.
+
+The Drive scope is intentionally read/write because Alcalay
+must be able to create and update files during LOCAL_TO_DRIVE
+synchronization.
 """
 
 from __future__ import annotations
@@ -54,8 +56,19 @@ DRIVE_DIR = PROJECT_ROOT / "config" / "drive"
 DRIVE_TOKENS_DIR = DRIVE_DIR / "tokens"
 
 
+# ----------------------------------------------------------------------
+# IMPORTANT:
+# Alcalay needs both read and write access to Google Drive.
+#
+# drive.readonly is NOT sufficient for:
+#     files.create()
+#     files.update()
+#
+# We therefore use the full Drive scope.
+# ----------------------------------------------------------------------
+
 SCOPES = [
-    "https://www.googleapis.com/auth/drive.readonly"
+    "https://www.googleapis.com/auth/drive"
 ]
 
 
@@ -158,19 +171,49 @@ def _load_alcalay_repository() -> dict[str, str]:
     return result
 
 
+def _credentials_have_required_scope(
+    credentials: Credentials,
+) -> bool:
+    """
+    Check whether the stored OAuth credentials contain
+    the Drive read/write scope required by Alcalay.
+
+    Existing tokens may still contain only drive.readonly.
+    In that case they must NOT be reused for LOCAL_TO_DRIVE.
+    """
+
+    required_scopes = set(SCOPES)
+
+    granted_scopes = set(
+        getattr(
+            credentials,
+            "scopes",
+            None,
+        )
+        or []
+    )
+
+    return required_scopes.issubset(
+        granted_scopes
+    )
+
+
 class DriveConnection:
     """
     Handles authenticated access to Google Drive.
 
-    The connection is read-only.
+    The connection provides the Drive permissions required by
+    Alcalay for both reading existing files and creating/updating
+    files during synchronization.
 
-    The read-only Drive scope allows the application to:
+    Required capabilities include:
         - Read file metadata.
         - Search Drive.
-        - Search indexed file content.
-        - Read/export file content when required.
+        - Read file content when required.
+        - Create files.
+        - Update files.
 
-    The connection does not provide write access to Drive.
+    It does not perform synchronization itself.
     """
 
     def __init__(
@@ -216,6 +259,10 @@ class DriveConnection:
         credentials = None
         token_file = None
 
+        # --------------------------------------------------------------
+        # Try to reuse the token belonging to the requested account.
+        # --------------------------------------------------------------
+
         if self.account_email:
 
             token_file = _token_file_for_email(
@@ -233,8 +280,25 @@ class DriveConnection:
                         )
                     )
 
+                    # --------------------------------------------------
+                    # A token created with drive.readonly is NOT enough
+                    # for LOCAL_TO_DRIVE.
+                    #
+                    # Do not attempt to use it.
+                    # Force a new OAuth authorization instead.
+                    # --------------------------------------------------
+
+                    if not _credentials_have_required_scope(
+                        credentials
+                    ):
+                        credentials = None
+
                 except Exception:
                     credentials = None
+
+        # --------------------------------------------------------------
+        # Refresh an existing valid-scope token when necessary.
+        # --------------------------------------------------------------
 
         if (
             credentials
@@ -242,9 +306,17 @@ class DriveConnection:
             and credentials.refresh_token
         ):
 
-            credentials.refresh(
-                Request()
-            )
+            try:
+                credentials.refresh(
+                    Request()
+                )
+
+            except Exception:
+                credentials = None
+
+        # --------------------------------------------------------------
+        # If there is no usable token, perform OAuth authorization.
+        # --------------------------------------------------------------
 
         if (
             not credentials
@@ -263,8 +335,19 @@ class DriveConnection:
                 flow.run_local_server(
                     port=0,
                     access_type="offline",
-                    prompt="select_account",
+                    prompt="consent",
                 )
+            )
+
+        # --------------------------------------------------------------
+        # Final safety check.
+        # --------------------------------------------------------------
+
+        if not _credentials_have_required_scope(
+            credentials
+        ):
+            raise PermissionError(
+                "אין הרשאות - נא להתחבר עם יוזר מורשה"
             )
 
         self.credentials = credentials
@@ -275,6 +358,11 @@ class DriveConnection:
             credentials=credentials,
             cache_discovery=False,
         )
+
+        # --------------------------------------------------------------
+        # If the email was not explicitly supplied, discover it from
+        # the authenticated Drive account.
+        # --------------------------------------------------------------
 
         if not self.account_email:
             self.account_email = (

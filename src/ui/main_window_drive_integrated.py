@@ -17,6 +17,11 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
+    QRadioButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -33,6 +38,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
 
 DEFAULT_GMAIL_ACCOUNT = "frank.avner@gmail.com"
+
+DIRECTION_DRIVE_TO_LOCAL = "DRIVE_TO_LOCAL"
+DIRECTION_LOCAL_TO_DRIVE = "LOCAL_TO_DRIVE"
 
 MENU_ITEMS = [
     (1, "Google"),
@@ -1489,6 +1497,661 @@ class GmailIndexWindow(QDialog):
         event.accept()
 
 
+class DriveSyncWindow(QDialog):
+    """
+    Dedicated Google Drive <-> Local synchronization window.
+
+    The worker is src/drive/drive_sync.py.
+    The window is intentionally kept on top and shows the complete live
+    synchronization state in one screen: progress, start time, elapsed
+    time, estimated end time and a live activity log.
+    """
+
+    TYPES = [
+        "PDF",
+        "WORD / OFFICE",
+        "EXCEL",
+        "POWERPOINT",
+        "IMAGES",
+        "GMAIL",
+        "FOLDER",
+        "OTHER",
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Alcalay - ניהול סנכרון Google Drive ↔ Local")
+        self.setWindowModality(Qt.ApplicationModal)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowMinimizeButtonHint
+            | Qt.WindowType.WindowMaximizeButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.resize(1150, 900)
+        self.setMinimumSize(1000, 760)
+
+        self.process = None
+        self.stdout_buffer = ""
+        self.stopping = False
+        self.started = False
+
+        self.run_start = None
+        self.last_progress_index = 0
+        self.last_progress_total = 0
+        self.last_progress_timestamp = None
+        self.current_name = ""
+        self.current_action = ""
+        self.current_kind = ""
+        self.stop_fallback_timer = None
+        self.elapsed_timer = QTimer(self)
+        self.elapsed_timer.setInterval(1000)
+        self.elapsed_timer.timeout.connect(self._update_timing)
+
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        title = QLabel("ניהול סנכרון Google Drive ↔ Local")
+        title.setObjectName("windowTitle")
+        layout.addWidget(title)
+
+        description = QLabel(
+            "חלון הסנכרון נשאר מעל חלונות המערכת ומציג בזמן אמת את כל פעולות הסנכרון. "
+            "הנתונים נלקחים מהרשומות הקיימות ב-PostgreSQL."
+        )
+        description.setObjectName("pageSubtitle")
+        description.setWordWrap(True)
+        layout.addWidget(description)
+
+        direction_frame = QFrame()
+        direction_frame.setObjectName("card")
+        direction_layout = QHBoxLayout(direction_frame)
+        direction_layout.setContentsMargins(14, 10, 14, 10)
+
+        direction_title = QLabel("כיוון:")
+        direction_title.setObjectName("cardTitle")
+        direction_layout.addWidget(direction_title)
+
+        self.drive_to_local_radio = QRadioButton("Drive → Local")
+        self.drive_to_local_radio.setChecked(True)
+        direction_layout.addWidget(self.drive_to_local_radio)
+
+        self.local_to_drive_radio = QRadioButton("Local → Drive")
+        direction_layout.addWidget(self.local_to_drive_radio)
+        direction_layout.addStretch()
+        layout.addWidget(direction_frame)
+
+        status_frame = QFrame()
+        status_frame.setObjectName("card")
+        status_layout = QVBoxLayout(status_frame)
+        status_layout.setContentsMargins(14, 10, 14, 10)
+        status_layout.setSpacing(7)
+
+        self.status_label = QLabel("מוכן")
+        self.status_label.setObjectName("statusLabel")
+        self.status_label.setWordWrap(True)
+        status_layout.addWidget(self.status_label)
+
+        self.current_operation_label = QLabel("פעולה נוכחית: -")
+        self.current_operation_label.setWordWrap(True)
+        status_layout.addWidget(self.current_operation_label)
+
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.progress.setTextVisible(True)
+        status_layout.addWidget(self.progress)
+
+        self.progress_detail_label = QLabel("התקדמות: 0 / 0")
+        status_layout.addWidget(self.progress_detail_label)
+
+        timing_layout = QHBoxLayout()
+        timing_layout.setSpacing(20)
+
+        self.start_time_label = QLabel("זמן התחלה: -")
+        self.elapsed_time_label = QLabel("זמן שחלף: 00:00:00")
+        self.estimated_end_label = QLabel("סיום משוער: -")
+
+        timing_layout.addWidget(self.start_time_label)
+        timing_layout.addWidget(self.elapsed_time_label)
+        timing_layout.addWidget(self.estimated_end_label)
+        timing_layout.addStretch()
+        status_layout.addLayout(timing_layout)
+
+        self.estimate_basis_label = QLabel("בסיס הערכה: ממתין לנתוני התקדמות")
+        status_layout.addWidget(self.estimate_basis_label)
+
+        self.summary_label = QLabel(
+            "מועמדים: 0 | הועברו: 0 | ללא שינוי: 0 | דולגו: 0 | "
+            "התנגשויות: 0 | שגיאות: 0"
+        )
+        self.summary_label.setWordWrap(True)
+        status_layout.addWidget(self.summary_label)
+
+        layout.addWidget(status_frame)
+
+        table_frame = QFrame()
+        table_frame.setObjectName("card")
+        table_layout = QVBoxLayout(table_frame)
+        table_layout.setContentsMargins(10, 10, 10, 10)
+        table_layout.setSpacing(6)
+
+        table_title = QLabel("סיכום חי לפי סוג נתון")
+        table_title.setObjectName("cardTitle")
+        table_layout.addWidget(table_title)
+
+        self.table = QTableWidget(len(self.TYPES), 6)
+        self.table.setHorizontalHeaderLabels([
+            "סוג",
+            "מועמדים",
+            "Drive → Local",
+            "Local → Drive",
+            "ללא שינוי / דולגו",
+            "התנגשויות / שגיאות",
+        ])
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        for column in range(1, 6):
+            self.table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.Stretch
+            )
+        for row, kind in enumerate(self.TYPES):
+            self.table.setItem(row, 0, QTableWidgetItem(kind))
+            for column in range(1, 6):
+                self.table.setItem(row, column, QTableWidgetItem("0"))
+        table_layout.addWidget(self.table)
+        layout.addWidget(table_frame)
+
+        activity_title = QLabel("ACTIVITY — תיעוד חי של כל פעילות")
+        activity_title.setObjectName("cardTitle")
+        layout.addWidget(activity_title)
+
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.output.setMinimumHeight(230)
+        layout.addWidget(self.output, 1)
+
+        button_row = QHBoxLayout()
+
+        self.start_button = QPushButton("התחל סנכרון")
+        self.start_button.clicked.connect(self.start)
+        button_row.addWidget(self.start_button)
+
+        self.stop_button = QPushButton("עצור")
+        self.stop_button.clicked.connect(self.stop)
+        self.stop_button.setEnabled(False)
+        button_row.addWidget(self.stop_button)
+
+        button_row.addStretch()
+
+        self.close_button = QPushButton("סגור")
+        self.close_button.clicked.connect(self.close)
+        button_row.addWidget(self.close_button)
+
+        layout.addLayout(button_row)
+
+    @staticmethod
+    def _format_duration(seconds):
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _format_clock(value):
+        return value.strftime("%H:%M:%S") if value else "-"
+
+    def _append_output(self, text):
+        if not text:
+            return
+        cursor = self.output.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self.output.setTextCursor(cursor)
+        self.output.insertPlainText(text)
+        self.output.ensureCursorVisible()
+
+    def _log_activity(self, message):
+        timestamp = self._format_clock(__import__("datetime").datetime.now())
+        self._append_output(f"[{timestamp}] {message}\n")
+
+    def _reset_table(self):
+        for row in range(self.table.rowCount()):
+            for column in range(1, self.table.columnCount()):
+                self.table.item(row, column).setText("0")
+
+    def _reset_run_state(self):
+        self.run_start = __import__("datetime").datetime.now()
+        self.last_progress_index = 0
+        self.last_progress_total = 0
+        self.last_progress_timestamp = self.run_start
+        self.current_name = ""
+        self.current_action = ""
+        self.current_kind = ""
+        self.start_time_label.setText(
+            f"זמן התחלה: {self._format_clock(self.run_start)}"
+        )
+        self.elapsed_time_label.setText("זמן שחלף: 00:00:00")
+        self.estimated_end_label.setText("סיום משוער: ממתין...")
+        self.estimate_basis_label.setText(
+            "בסיס הערכה: ממתין לסיום הפעולה הראשונה"
+        )
+        self.progress_detail_label.setText("התקדמות: 0 / 0")
+        self.elapsed_timer.start()
+
+    def _update_timing(self):
+        if not self.run_start:
+            return
+
+        now = __import__("datetime").datetime.now()
+        elapsed = (now - self.run_start).total_seconds()
+        self.elapsed_time_label.setText(
+            f"זמן שחלף: {self._format_duration(elapsed)}"
+        )
+
+        total = self.last_progress_total
+        index = self.last_progress_index
+
+        if total <= 0 or index <= 0:
+            return
+
+        rate = index / max(elapsed, 0.001)
+        remaining = max(total - index, 0)
+        remaining_seconds = remaining / rate if rate > 0 else 0
+        estimated_end = now + __import__("datetime").timedelta(
+            seconds=remaining_seconds
+        )
+
+        self.estimated_end_label.setText(
+            f"סיום משוער: {self._format_clock(estimated_end)}"
+        )
+        self.estimate_basis_label.setText(
+            f"בסיס הערכה: {index:,}/{total:,} פריטים, "
+            f"קצב ממוצע {rate:.2f} פריטים/שנייה"
+        )
+
+    def _update_summary(self, summary):
+        if not summary:
+            return
+        transferred = int(summary.get("downloaded", 0)) + int(
+            summary.get("uploaded", 0)
+        )
+        self.summary_label.setText(
+            "מועמדים: " + f"{int(summary.get('candidates', 0)):,}"
+            + " | הועברו: " + f"{transferred:,}"
+            + " | ללא שינוי: " + f"{int(summary.get('no_change', 0)):,}"
+            + " | דולגו: " + f"{int(summary.get('skipped', 0)):,}"
+            + " | התנגשויות: " + f"{int(summary.get('conflicts', 0)):,}"
+            + " | שגיאות: " + f"{int(summary.get('errors', 0)):,}"
+        )
+
+    def _update_table(self, by_type, direction):
+        for row, kind in enumerate(self.TYPES):
+            stats = by_type.get(kind) or {}
+            candidates = int(stats.get("candidates", 0))
+            transferred = int(stats.get("transferred", 0))
+            no_change = int(stats.get("no_change", 0))
+            skipped = int(stats.get("skipped", 0))
+            conflicts = int(stats.get("conflicts", 0))
+            errors = int(stats.get("errors", 0))
+
+            self.table.item(row, 1).setText(f"{candidates:,}")
+            self.table.item(row, 2).setText(
+                f"{transferred:,}" if direction == DIRECTION_DRIVE_TO_LOCAL else "0"
+            )
+            self.table.item(row, 3).setText(
+                f"{transferred:,}" if direction == DIRECTION_LOCAL_TO_DRIVE else "0"
+            )
+            self.table.item(row, 4).setText(f"{no_change + skipped:,}")
+            self.table.item(row, 5).setText(f"{conflicts + errors:,}")
+
+    def _update_from_event(self, payload):
+        event = payload.get("event")
+        summary = payload.get("summary") or {}
+        by_type = payload.get("by_type") or {}
+        direction = payload.get("direction") or (
+            DIRECTION_DRIVE_TO_LOCAL
+            if self.drive_to_local_radio.isChecked()
+            else DIRECTION_LOCAL_TO_DRIVE
+        )
+
+        if event == "started":
+            total = int(payload.get("candidates") or 0)
+            self.last_progress_total = total
+            self.last_progress_index = 0
+            self.progress.setRange(0, max(total, 1))
+            self.progress.setValue(0)
+            self.progress_detail_label.setText(
+                f"התקדמות: 0 / {total:,}"
+            )
+            self.status_label.setText(
+                f"הסנכרון התחיל — {total:,} מועמדים."
+            )
+            self._log_activity(
+                f"STARTED | כיוון={direction} | מועמדים={total:,}"
+            )
+
+        elif event == "item_start":
+            index = int(payload.get("index") or 0)
+            total = int(payload.get("total") or 0)
+            name = str(payload.get("name") or "")
+            kind = str(payload.get("kind") or "OTHER")
+            self.current_name = name
+            self.current_kind = kind
+            self.last_progress_total = total
+            self.progress_detail_label.setText(
+                f"התקדמות: {index - 1:,} / {total:,}"
+            )
+            self.current_operation_label.setText(
+                f"פעולה נוכחית: {index:,}/{total:,} | {kind} | {name}"
+            )
+            self.status_label.setText(
+                f"מעבד פריט {index:,}/{total:,}"
+            )
+            self._log_activity(
+                f"ITEM START | {index:,}/{total:,} | {kind} | {name}"
+            )
+
+        elif event == "item_done":
+            index = int(payload.get("index") or 0)
+            total = int(payload.get("total") or 0)
+            name = str(payload.get("name") or "")
+            kind = str(payload.get("kind") or "OTHER")
+            action = str(payload.get("action") or "")
+            message = str(payload.get("message") or "")
+            self.last_progress_index = index
+            self.last_progress_total = total
+            if total > 0:
+                self.progress.setRange(0, total)
+                self.progress.setValue(min(index, total))
+            self.progress_detail_label.setText(
+                f"התקדמות: {index:,} / {total:,}"
+            )
+            self.current_operation_label.setText(
+                f"פעולה אחרונה: {action} | {kind} | {name}"
+            )
+            self.status_label.setText(
+                f"הושלם {index:,}/{total:,} — {action}"
+            )
+            self.current_action = action
+            self._log_activity(
+                f"ITEM DONE | {index:,}/{total:,} | {action} | {kind} | "
+                f"{name} | {message}"
+            )
+
+        elif event == "stop_requested":
+            self.status_label.setText(
+                "בקשת עצירה התקבלה — עוצר את תהליך הסנכרון..."
+            )
+            self._log_activity(
+                "STOP REQUESTED | התקבלה בקשת עצירה מהמשתמש"
+            )
+
+        elif event == "finished":
+            status = str(payload.get("status") or "UNKNOWN")
+            self.status_label.setText(
+                f"הסנכרון הסתיים: {status}"
+            )
+            self._log_activity(f"FINISHED | status={status}")
+
+        elif event == "fatal_error":
+            message = str(payload.get("message") or "")
+            self.status_label.setText(
+                "סנכרון נכשל: " + message
+            )
+            self._log_activity(
+                f"FATAL ERROR | {message}"
+            )
+
+        self._update_summary(summary)
+        self._update_table(by_type, direction)
+        self._update_timing()
+
+    def _process_event_line(self, line):
+        if not line.startswith("[SYNC_EVENT] "):
+            return False
+        raw = line[len("[SYNC_EVENT] "):].strip()
+        try:
+            import json
+            payload = json.loads(raw)
+        except Exception:
+            return False
+        self._update_from_event(payload)
+        return True
+
+    def _read_stdout(self):
+        if self.process is None:
+            return
+        data = bytes(self.process.readAllStandardOutput())
+        if not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        self.stdout_buffer += text
+        while "\n" in self.stdout_buffer:
+            line, self.stdout_buffer = self.stdout_buffer.split("\n", 1)
+            line = line.rstrip("\r")
+            if not self._process_event_line(line):
+                self._append_output(line + "\n")
+
+    def _read_stderr(self):
+        if self.process is None:
+            return
+        data = bytes(self.process.readAllStandardError())
+        if not data:
+            return
+        text = data.decode("utf-8", errors="replace")
+        self._append_output(text)
+        self._log_activity("STDERR | " + text.rstrip())
+
+    def _create_process_environment(self, direction):
+        environment = QProcessEnvironment.systemEnvironment()
+        existing_pythonpath = environment.value("PYTHONPATH", "")
+        paths = [str(PROJECT_ROOT), str(SRC_ROOT)]
+        if existing_pythonpath:
+            paths.append(existing_pythonpath)
+        environment.insert("PYTHONPATH", os.pathsep.join(paths))
+        environment.insert("PYTHONUNBUFFERED", "1")
+        environment.insert("ALCALAY_SYNC_DIRECTION", direction)
+        return environment
+
+    def start(self):
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            return
+
+        script = PROJECT_ROOT / "src" / "drive" / "drive_sync.py"
+        if not script.exists():
+            QMessageBox.critical(
+                self,
+                "שגיאה",
+                f"קובץ הסנכרון לא נמצא:\n{script}",
+            )
+            return
+
+        direction = (
+            DIRECTION_DRIVE_TO_LOCAL
+            if self.drive_to_local_radio.isChecked()
+            else DIRECTION_LOCAL_TO_DRIVE
+        )
+
+        self.stopping = False
+        self.started = True
+        self.stdout_buffer = ""
+        self.output.clear()
+        self._reset_table()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.summary_label.setText(
+            "מועמדים: 0 | הועברו: 0 | ללא שינוי: 0 | דולגו: 0 | "
+            "התנגשויות: 0 | שגיאות: 0"
+        )
+        self.current_operation_label.setText("פעולה נוכחית: מתחבר ומכין סנכרון...")
+        self.status_label.setText(
+            "מפעיל סנכרון: "
+            + ("Drive → Local" if direction == DIRECTION_DRIVE_TO_LOCAL else "Local → Drive")
+        )
+        self._reset_run_state()
+        self._log_activity(
+            "RUN START | "
+            + ("Drive → Local" if direction == DIRECTION_DRIVE_TO_LOCAL else "Local → Drive")
+        )
+
+        self.drive_to_local_radio.setEnabled(False)
+        self.local_to_drive_radio.setEnabled(False)
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.close_button.setEnabled(False)
+
+        self.process = QProcess(self)
+        self.process.setProcessChannelMode(
+            QProcess.ProcessChannelMode.SeparateChannels
+        )
+        self.process.setProcessEnvironment(
+            self._create_process_environment(direction)
+        )
+        self.process.setWorkingDirectory(str(PROJECT_ROOT))
+        self.process.setProgram(sys.executable)
+        self.process.setArguments(["-u", str(script)])
+        self.process.readyReadStandardOutput.connect(self._read_stdout)
+        self.process.readyReadStandardError.connect(self._read_stderr)
+        self.process.errorOccurred.connect(self._process_error)
+        self.process.finished.connect(self._process_finished)
+        self.process.start()
+
+        if not self.process.waitForStarted(5000):
+            self._process_error(QProcess.ProcessError.FailedToStart)
+
+    def stop(self):
+        if self.process is None or self.process.state() == QProcess.ProcessState.NotRunning:
+            return
+
+        if self.stopping:
+            return
+
+        self.stopping = True
+        self.stop_button.setEnabled(False)
+        self.status_label.setText(
+            "עוצר... בקשת STOP נשלחה לתהליך הסנכרון."
+        )
+        self.current_operation_label.setText(
+            "פעולה נוכחית: ממתין לעצירת תהליך הסנכרון..."
+        )
+        self._log_activity(
+            "STOP | שולח STOP לתהליך הסנכרון"
+        )
+
+        try:
+            self.process.write(b"STOP\n")
+            self.process.waitForBytesWritten(1000)
+            self.process.flush()
+        except Exception as exc:
+            self._log_activity(
+                f"STOP WRITE ERROR | {type(exc).__name__}: {exc}"
+            )
+
+        # The worker normally stops between files. If it is blocked in a
+        # long network/file operation, do not leave the user waiting forever.
+        # After 4 seconds the process is forcibly terminated.
+        QTimer.singleShot(4000, self._force_stop_if_running)
+
+    def _force_stop_if_running(self):
+        if not self.stopping or self.process is None:
+            return
+        if self.process.state() == QProcess.ProcessState.NotRunning:
+            return
+
+        self._log_activity(
+            "STOP TIMEOUT | התהליך עדיין פעיל לאחר 4 שניות — מבצע עצירה מיידית"
+        )
+        self.status_label.setText(
+            "מבצע עצירה מיידית של תהליך הסנכרון..."
+        )
+        self.process.terminate()
+
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            QTimer.singleShot(1500, self._kill_if_still_running)
+
+    def _kill_if_still_running(self):
+        if not self.stopping or self.process is None:
+            return
+        if self.process.state() != QProcess.ProcessState.NotRunning:
+            self._log_activity(
+                "STOP KILL | terminate לא הספיק — מבצע kill לתהליך"
+            )
+            self.process.kill()
+
+    def _process_error(self, error):
+        if error == QProcess.ProcessError.FailedToStart:
+            message = "לא ניתן להפעיל את Google Drive Sync."
+        else:
+            message = f"שגיאת QProcess: {error}"
+        self.status_label.setText(message)
+        self._append_output("\n[ERROR] " + message + "\n")
+        self._log_activity("PROCESS ERROR | " + message)
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.close_button.setEnabled(True)
+        self.drive_to_local_radio.setEnabled(True)
+        self.local_to_drive_radio.setEnabled(True)
+
+    def _process_finished(self, exit_code, exit_status):
+        if self.stdout_buffer:
+            line = self.stdout_buffer.rstrip("\r")
+            if line:
+                if not self._process_event_line(line):
+                    self._append_output(line + "\n")
+            self.stdout_buffer = ""
+
+        self.elapsed_timer.stop()
+        self._update_timing()
+
+        if self.stopping:
+            self.status_label.setText("הסנכרון נעצר לפי בקשת המשתמש.")
+            self._log_activity(
+                f"RUN STOPPED | exit_code={exit_code}"
+            )
+        elif exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+            self.progress.setValue(self.progress.maximum())
+            self.status_label.setText("הסנכרון הסתיים בהצלחה.")
+            self.estimated_end_label.setText(
+                f"סיום בפועל: {self._format_clock(__import__('datetime').datetime.now())}"
+            )
+            self._log_activity("RUN COMPLETED | הסנכרון הסתיים בהצלחה")
+        else:
+            self.status_label.setText(
+                f"הסנכרון הסתיים עם שגיאה. קוד: {exit_code}"
+            )
+            self._log_activity(
+                f"RUN ERROR | exit_code={exit_code}"
+            )
+
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.close_button.setEnabled(True)
+        self.drive_to_local_radio.setEnabled(True)
+        self.local_to_drive_radio.setEnabled(True)
+        self.process = None
+
+    def closeEvent(self, event):
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            self.stop()
+            if not self.process.waitForFinished(5500):
+                self.process.kill()
+                self.process.waitForFinished(1500)
+        self.elapsed_timer.stop()
+        event.accept()
+
+
 class GoogleDriveWindow(QDialog):
     """
     Alcalay - Google Drive control window.
@@ -1539,6 +2202,12 @@ class GoogleDriveWindow(QDialog):
             "הורדה או Export של קבצים רלוונטיים שאושרו בשלב הבדיקה.",
             "src/drive/drive_downloader.py",
         ),
+        (
+            "sync",
+            "סנכרון Drive ↔ Local",
+            "סנכרון דו-כיווני של הנתונים שכבר רשומים ב-PostgreSQL, ללא סריקה חדשה של Google Drive או של האחסון המקומי.",
+            "src/drive/drive_sync.py",
+        ),
     ]
 
     def __init__(self, parent=None):
@@ -1551,6 +2220,7 @@ class GoogleDriveWindow(QDialog):
         self.process = None
         self.current_command = None
         self.buttons = {}
+        self.sync_window = None
 
         self._build_ui()
 
@@ -1750,6 +2420,10 @@ class GoogleDriveWindow(QDialog):
         self._start_python_code_process(code)
 
     def run_command(self, key):
+        if key == "sync":
+            self.open_sync_window()
+            return
+
         if (
             self.process is not None
             and self.process.state()
@@ -1824,6 +2498,22 @@ class GoogleDriveWindow(QDialog):
             self._process_error(
                 QProcess.ProcessError.FailedToStart
             )
+
+    def open_sync_window(self):
+        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
+            QMessageBox.information(
+                self,
+                "Google Drive",
+                "פעולת Drive אחרת כבר מתבצעת.",
+            )
+            return
+
+        if self.sync_window is None:
+            self.sync_window = DriveSyncWindow(self)
+
+        self.sync_window.show()
+        self.sync_window.raise_()
+        self.sync_window.activateWindow()
 
     def _start_python_code_process(self, code):
         self.process = QProcess(self)
@@ -1958,11 +2648,28 @@ class GoogleDriveWindow(QDialog):
             "עוצר את פעולת Google Drive..."
         )
 
-        self.process.terminate()
+        # The sync process supports a graceful STOP command.
+        # Give it priority over terminate/kill so the current file
+        # can finish and the process can stop between files.
+        if self.current_command == "sync":
+            try:
+                self.process.write(b"STOP\n")
+                self.process.waitForBytesWritten(1000)
+            except Exception:
+                pass
 
-        if not self.process.waitForFinished(1500):
-            self.process.kill()
-            self.process.waitForFinished(1000)
+            if not self.process.waitForFinished(5000):
+                self.process.terminate()
+
+                if not self.process.waitForFinished(1500):
+                    self.process.kill()
+                    self.process.waitForFinished(1000)
+        else:
+            self.process.terminate()
+
+            if not self.process.waitForFinished(1500):
+                self.process.kill()
+                self.process.waitForFinished(1000)
 
         self._append_output(
             "\n[GUI] Google Drive process stopped.\n"
@@ -1983,6 +2690,9 @@ class GoogleDriveWindow(QDialog):
                 if not self.process.waitForFinished(1500):
                     self.process.kill()
                     self.process.waitForFinished(1000)
+
+        if self.sync_window is not None:
+            self.sync_window.close()
 
         event.accept()
 
