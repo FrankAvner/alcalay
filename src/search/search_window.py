@@ -59,7 +59,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 
-from database.connection import DatabaseConnection
+from src.database.connection import DatabaseConnection
 from search.search_result_window import SearchResultWindow
 
 
