@@ -32,6 +32,7 @@ from database.connection import DatabaseConnection
 from gmail.gmail_connection import GmailConnection
 from gmail.gmail_window import GmailWindow
 from search.search_window import SearchWindow
+from indexing.index_window import IndexWindow
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1705,6 +1706,137 @@ class GoogleLauncherPage(QWidget):
 
 
 # ----------------------------------------------------------------------
+# Search Launcher Page
+# ----------------------------------------------------------------------
+
+class SearchLauncherPage(QWidget):
+    """
+    Central search launcher.
+
+    The page exposes two separate operations:
+      - regular repository search
+      - unified indexing
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.parent_window = parent
+        self.search_window = None
+        self.index_window = None
+
+        self.setLayoutDirection(Qt.RightToLeft)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(16)
+
+        title = QLabel("חיפוש")
+        title.setAlignment(Qt.AlignRight)
+        title.setStyleSheet(
+            "font-size: 28px; font-weight: bold; padding: 8px;"
+        )
+        layout.addWidget(title)
+
+        description = QLabel(
+            "חיפוש במידע שנשמר במאגרים, או הפעלת אינדוקס מרכזי "
+            "של מיילים, מסמכים ומנוע AI. ניתן להפעיל כמה אפשרויות יחד."
+        )
+        description.setWordWrap(True)
+        description.setAlignment(Qt.AlignRight)
+        description.setStyleSheet(
+            "font-size: 15px; padding: 8px;"
+        )
+        layout.addWidget(description)
+
+        search_frame = QFrame()
+        search_frame.setObjectName("searchLauncherFrame")
+        search_layout = QVBoxLayout(search_frame)
+        search_layout.setContentsMargins(20, 20, 20, 20)
+        search_layout.setSpacing(10)
+
+        search_title = QLabel("חיפוש במאגרים")
+        search_title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
+        )
+        search_layout.addWidget(search_title)
+
+        search_text = QLabel(
+            "פתיחת חלון החיפוש הקיים במערכת."
+        )
+        search_text.setWordWrap(True)
+        search_layout.addWidget(search_text)
+
+        search_button = QPushButton("🔎  חיפוש")
+        search_button.setMinimumHeight(55)
+        search_button.clicked.connect(self.open_search)
+        search_layout.addWidget(search_button)
+
+        layout.addWidget(search_frame)
+
+        index_frame = QFrame()
+        index_frame.setObjectName("indexLauncherFrame")
+        index_layout = QVBoxLayout(index_frame)
+        index_layout.setContentsMargins(20, 20, 20, 20)
+        index_layout.setSpacing(10)
+
+        index_title = QLabel("אינדקס")
+        index_title.setStyleSheet(
+            "font-size: 20px; font-weight: bold;"
+        )
+        index_layout.addWidget(index_title)
+
+        index_text = QLabel(
+            "בחירת אינדוקס של מיילים, אינדוקס מסמכים ומנוע AI. "
+            "החלון מציג התקדמות, כמה טופלו, כמה נשארו, שגיאות, "
+            "וכפתור עצור עם אפשרות להמשיך מאותה נקודה."
+        )
+        index_text.setWordWrap(True)
+        index_layout.addWidget(index_text)
+
+        index_button = QPushButton("🗂  אינדקס")
+        index_button.setMinimumHeight(55)
+        index_button.clicked.connect(self.open_index)
+        index_layout.addWidget(index_button)
+
+        layout.addWidget(index_frame)
+
+        layout.addStretch()
+
+    def open_search(self):
+        try:
+            if self.search_window is None:
+                self.search_window = SearchWindow(self)
+
+            self.search_window.show()
+            self.search_window.raise_()
+            self.search_window.activateWindow()
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Search",
+                f"שגיאה בפתיחת Search:\n{exc}",
+            )
+
+    def open_index(self):
+        try:
+            if self.index_window is None:
+                self.index_window = IndexWindow(self)
+
+            self.index_window.show()
+            self.index_window.raise_()
+            self.index_window.activateWindow()
+
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "אינדקס",
+                f"שגיאה בפתיחת חלון האינדקס:\n{exc}",
+            )
+
+
+# ----------------------------------------------------------------------
 # Placeholder Page
 # ----------------------------------------------------------------------
 
@@ -1772,7 +1904,7 @@ class MainWindow(QWidget):
         menu_items = [
             "Google",
             "מסמכים לפי קטגוריה",
-            "חיפוש כללי",
+            "חיפוש",
             "מסד נתונים",
             "הורדה מקומית",
             "משתמשים והרשאות",
@@ -1812,9 +1944,8 @@ class MainWindow(QWidget):
         )
 
         self.add_page(
-            "חיפוש כללי",
-            PlaceholderPage(
-                "חיפוש כללי",
+            "חיפוש",
+            SearchLauncherPage(
                 self,
             ),
         )
