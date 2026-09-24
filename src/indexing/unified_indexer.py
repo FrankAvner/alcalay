@@ -47,12 +47,14 @@ from src.indexing.document_extractor import (
 
 
 INDEXER_VERSION = "1.0"
+
 REPOSITORY_DOCUMENT_ROOTS = (
     PROJECT_ROOT / "storage" / "drive",
     PROJECT_ROOT / "storage" / "office",
     PROJECT_ROOT / "storage" / "documents",
     PROJECT_ROOT / "storage" / "local",
 )
+
 GMAIL_ROOT = PROJECT_ROOT / "storage" / "gmail"
 
 STOP_WORDS = {"STOP", "QUIT", "EXIT", "עצור"}
@@ -61,30 +63,43 @@ STOP_WORDS = {"STOP", "QUIT", "EXIT", "עצור"}
 class UnifiedIndexer:
     def __init__(self, stages: list[str], start_mode: str = "resume") -> None:
         normalized = []
+
         for stage in stages:
             stage = str(stage).strip().lower()
+
             if stage in {"mail", "mails", "gmail"}:
                 stage = "mails"
+
             elif stage in {"document", "documents", "docs"}:
                 stage = "documents"
+
             elif stage in {"ai", "semantic", "semantic_ai"}:
                 stage = "ai"
+
             else:
                 raise ValueError(f"Unsupported index stage: {stage}")
+
             if stage not in normalized:
                 normalized.append(stage)
 
         self.stages = normalized
+
         self.start_mode = str(start_mode or "resume").strip().lower()
+
         if self.start_mode not in {"fresh", "resume"}:
-            raise ValueError(f"Unsupported start mode: {self.start_mode}")
+            raise ValueError(
+                f"Unsupported start mode: {self.start_mode}"
+            )
 
         self.db = DatabaseConnection()
         self.connection = None
+
         self.stop_event = threading.Event()
         self.input_thread: threading.Thread | None = None
+
         self.run_id: int | None = None
         self.run_uuid: str | None = None
+
         self.current_stage = None
         self.current_item_key = None
         self.current_item_name = None
@@ -111,6 +126,7 @@ class UnifiedIndexer:
             "timestamp": self.now_iso(),
             **data,
         }
+
         print(
             "[INDEX_EVENT] "
             + json.dumps(
@@ -140,6 +156,7 @@ class UnifiedIndexer:
                 for line in sys.stdin:
                     if line.strip().upper() in STOP_WORDS:
                         self.stop_event.set()
+
                         self.emit(
                             "STOP_REQUESTED",
                             message="בקשת עצירה התקבלה.",
@@ -147,7 +164,9 @@ class UnifiedIndexer:
                             current_item_name=self.current_item_name,
                             current_item_path=self.current_item_path,
                         )
+
                         break
+
             except Exception:
                 pass
 
@@ -155,6 +174,7 @@ class UnifiedIndexer:
             target=reader,
             daemon=True,
         )
+
         self.input_thread.start()
 
     # ------------------------------------------------------------------
@@ -166,9 +186,14 @@ class UnifiedIndexer:
         self.ensure_schema()
         self.recover_stale_runs()
 
-    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
+    def execute(
+        self,
+        sql: str,
+        params: tuple[Any, ...] = (),
+    ) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute(sql, params)
+
         self.connection.commit()
 
     def ensure_schema(self) -> None:
@@ -218,11 +243,26 @@ class UnifiedIndexer:
                 ADD COLUMN IF NOT EXISTS ai_text TEXT,
                 ADD COLUMN IF NOT EXISTS ai_embedding JSONB
             """,
-            "CREATE INDEX IF NOT EXISTS idx_document_index_source_type ON document_index(source_type)",
-            "CREATE INDEX IF NOT EXISTS idx_document_index_source_hash ON document_index(source_hash)",
-            "CREATE INDEX IF NOT EXISTS idx_document_index_content_hash ON document_index(content_hash)",
-            "CREATE INDEX IF NOT EXISTS idx_document_index_search_vector ON document_index USING GIN(search_vector)",
-            "CREATE INDEX IF NOT EXISTS idx_document_index_ai_status ON document_index(ai_status)",
+            """
+            CREATE INDEX IF NOT EXISTS idx_document_index_source_type
+            ON document_index(source_type)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_document_index_source_hash
+            ON document_index(source_hash)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_document_index_content_hash
+            ON document_index(content_hash)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_document_index_search_vector
+            ON document_index USING GIN(search_vector)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_document_index_ai_status
+            ON document_index(ai_status)
+            """,
             """
             CREATE TABLE IF NOT EXISTS index_runs (
                 id BIGSERIAL PRIMARY KEY,
@@ -246,8 +286,14 @@ class UnifiedIndexer:
                 last_error TEXT
             )
             """,
-            "CREATE INDEX IF NOT EXISTS idx_index_runs_status ON index_runs(status)",
-            "CREATE INDEX IF NOT EXISTS idx_index_runs_started_at ON index_runs(started_at DESC)",
+            """
+            CREATE INDEX IF NOT EXISTS idx_index_runs_status
+            ON index_runs(status)
+            """,
+            """
+            CREATE INDEX IF NOT EXISTS idx_index_runs_started_at
+            ON index_runs(started_at DESC)
+            """,
         ]
 
         for sql in statements:
@@ -263,20 +309,27 @@ class UnifiedIndexer:
                 UPDATE index_runs
                    SET status = 'INTERRUPTED',
                        finished_at = COALESCE(finished_at, NOW()),
-                       stop_reason = COALESCE(stop_reason, 'process interrupted or application closed'),
+                       stop_reason = COALESCE(
+                           stop_reason,
+                           'process interrupted or application closed'
+                       ),
                        remaining_items = GREATEST(
-                           COALESCE(total_items, 0) - COALESCE(completed_items, 0) - COALESCE(skipped_items, 0),
+                           COALESCE(total_items, 0)
+                           - COALESCE(completed_items, 0)
+                           - COALESCE(skipped_items, 0),
                            0
                        )
                  WHERE status = 'RUNNING'
                 """
             )
+
         self.connection.commit()
 
     def create_run(self) -> None:
         import uuid
 
         self.run_uuid = str(uuid.uuid4())
+
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -295,7 +348,9 @@ class UnifiedIndexer:
                     self.json_value(self.stages),
                 ),
             )
+
             self.run_id = cursor.fetchone()[0]
+
         self.connection.commit()
 
     def update_run(self, **fields: Any) -> None:
@@ -331,6 +386,7 @@ class UnifiedIndexer:
 
         assignments = []
         params: list[Any] = []
+
         for key, value in fields.items():
             assignments.append(f"{key} = %s")
             params.append(value)
@@ -347,7 +403,11 @@ class UnifiedIndexer:
 
         self.connection.commit()
 
-    def finish_run(self, status: str, stop_reason: str | None = None) -> None:
+    def finish_run(
+        self,
+        status: str,
+        stop_reason: str | None = None,
+    ) -> None:
         self.update_run(
             status=status,
             finished_at=self.now(),
@@ -363,8 +423,12 @@ class UnifiedIndexer:
 
     def relative_key(self, path: Path) -> str:
         try:
-            relative = path.resolve().relative_to(PROJECT_ROOT.resolve())
+            relative = path.resolve().relative_to(
+                PROJECT_ROOT.resolve()
+            )
+
             return relative.as_posix()
+
         except Exception:
             return str(path.resolve())
 
@@ -376,7 +440,10 @@ class UnifiedIndexer:
             path
             for path in GMAIL_ROOT.rglob("*.eml")
             if path.is_file()
-            and not any(part.startswith(".") for part in path.parts)
+            and not any(
+                part.startswith(".")
+                for part in path.parts
+            )
         )
 
     def iter_document_files(self) -> Iterable[Path]:
@@ -390,29 +457,45 @@ class UnifiedIndexer:
             for path in root.rglob("*"):
                 if not path.is_file():
                     continue
-                if any(part.startswith(".") for part in path.parts):
+
+                if any(
+                    part.startswith(".")
+                    for part in path.parts
+                ):
                     continue
+
                 if path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                     continue
 
                 resolved = str(path.resolve())
+
                 if resolved in seen:
                     continue
+
                 seen.add(resolved)
                 files.append(path)
 
-        files.sort(key=lambda item: str(item).lower())
+        files.sort(
+            key=lambda item: str(item).lower()
+        )
+
         return files
 
     def sha256_file(self, path: Path) -> str:
         digest = hashlib.sha256()
+
         with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            for chunk in iter(
+                lambda: handle.read(1024 * 1024),
+                b"",
+            ):
                 digest.update(chunk)
+
         return digest.hexdigest()
 
     def stat_metadata(self, path: Path) -> dict[str, Any]:
         stat = path.stat()
+
         return {
             "size_bytes": stat.st_size,
             "modified_at": datetime.fromtimestamp(
@@ -426,15 +509,143 @@ class UnifiedIndexer:
         }
 
     # ------------------------------------------------------------------
+    # Gmail attachment local-path resolution
+    # ------------------------------------------------------------------
+
+    def gmail_attachment_root(
+        self,
+        message_path: Path,
+    ) -> Path:
+        """
+        Return the real local Gmail attachments directory belonging
+        to the EML file.
+
+        Existing local Gmail structure:
+
+            storage/gmail/
+                <account>/
+                    attachments/
+                    copy_audit/
+                    messages/
+
+        The message_path is inside:
+
+            <account>/messages/...
+
+        Therefore the account root is the parent of "messages",
+        and attachments are stored beside it.
+        """
+
+        resolved_message = message_path.resolve()
+
+        for parent in resolved_message.parents:
+            if parent.name.lower() == "messages":
+                account_root = parent.parent
+                return account_root / "attachments"
+
+        # Safe fallback for an unexpected path.
+        return GMAIL_ROOT / "attachments"
+
+    def find_local_gmail_attachment(
+        self,
+        message_path: Path,
+        file_name: str,
+        attachment_hash: str,
+    ) -> Path | None:
+        """
+        Find the actual attachment file already stored locally.
+
+        We first try the exact expected path:
+
+            <account>/attachments/<file_name>
+
+        If that is not present, we search recursively under the same
+        account's attachments directory.
+
+        The hash is used as a secondary validation when possible.
+        """
+
+        attachments_root = self.gmail_attachment_root(
+            message_path
+        )
+
+        if not attachments_root.exists():
+            return None
+
+        # --------------------------------------------------------------
+        # 1. Exact expected path
+        # --------------------------------------------------------------
+
+        exact_path = attachments_root / file_name
+
+        if exact_path.is_file():
+            try:
+                if self.sha256_file(exact_path) == attachment_hash:
+                    return exact_path.resolve()
+            except Exception:
+                pass
+
+            # The filename matches. Keep it as a fallback because
+            # some Gmail copy implementations may normalize content
+            # while preserving the original filename.
+            return exact_path.resolve()
+
+        # --------------------------------------------------------------
+        # 2. Recursive filename search
+        # --------------------------------------------------------------
+
+        try:
+            candidates = [
+                path
+                for path in attachments_root.rglob(file_name)
+                if path.is_file()
+            ]
+        except Exception:
+            candidates = []
+
+        if not candidates:
+            return None
+
+        # Prefer an exact content-hash match.
+        for candidate in candidates:
+            try:
+                if self.sha256_file(candidate) == attachment_hash:
+                    return candidate.resolve()
+            except Exception:
+                continue
+
+        # Otherwise use the first deterministic filename match.
+        candidates.sort(
+            key=lambda item: str(item).lower()
+        )
+
+        return candidates[0].resolve()
+
+    # ------------------------------------------------------------------
     # DB lookup / upsert
     # ------------------------------------------------------------------
 
     def json_value(self, value: Any) -> Any:
         if Json is not None:
-            return Json(value, dumps=lambda data: json.dumps(data, ensure_ascii=False, default=str))
-        return json.dumps(value, ensure_ascii=False, default=str)
+            return Json(
+                value,
+                dumps=lambda data: json.dumps(
+                    data,
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
 
-    def get_existing(self, source_key: str) -> dict[str, Any] | None:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            default=str,
+        )
+
+    def get_existing(
+        self,
+        source_key: str,
+    ) -> dict[str, Any] | None:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -452,6 +663,7 @@ class UnifiedIndexer:
                 """,
                 (source_key,),
             )
+
             row = cursor.fetchone()
 
         if not row:
@@ -555,37 +767,44 @@ class UnifiedIndexer:
                     indexed_at = NOW(),
                     updated_at = NOW(),
                     ai_status = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN 'PENDING'
                         ELSE document_index.ai_status
                     END,
                     ai_indexed_at = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_indexed_at
                     END,
                     ai_content_hash = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_content_hash
                     END,
                     ai_provider = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_provider
                     END,
                     ai_model = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_model
                     END,
                     ai_text = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_text
                     END,
                     ai_embedding = CASE
-                        WHEN document_index.content_hash IS DISTINCT FROM EXCLUDED.content_hash
+                        WHEN document_index.content_hash
+                            IS DISTINCT FROM EXCLUDED.content_hash
                             THEN NULL
                         ELSE document_index.ai_embedding
                     END
@@ -647,6 +866,7 @@ class UnifiedIndexer:
                     document_id,
                 ),
             )
+
         self.connection.commit()
 
     def mark_ai_error(
@@ -665,16 +885,23 @@ class UnifiedIndexer:
                 """,
                 (document_id,),
             )
+
         self.connection.commit()
 
-        self.update_run(last_error=error_message)
+        self.update_run(
+            last_error=error_message
+        )
 
     # ------------------------------------------------------------------
     # Mail indexing
     # ------------------------------------------------------------------
 
     def index_mail_file(self, path: Path) -> str:
-        source_key = "gmail:message:" + self.relative_key(path)
+        source_key = (
+            "gmail:message:"
+            + self.relative_key(path)
+        )
+
         source_hash = self.sha256_file(path)
         existing = self.get_existing(source_key)
 
@@ -682,18 +909,27 @@ class UnifiedIndexer:
             existing
             and existing["source_hash"] == source_hash
             and existing["extractor_version"] == EXTRACTOR_VERSION
-            and existing["extraction_status"] in {"SUCCESS", "ENCRYPTED"}
+            and existing["extraction_status"]
+            in {"SUCCESS", "ENCRYPTED"}
         ):
             self.stage_stats["mails"]["skipped"] += 1
             return "SKIPPED"
 
         stat = self.stat_metadata(path)
         extracted = extract_document(path)
+
         email = extracted.get("email") or {}
-        metadata = dict(extracted.get("metadata") or {})
+
+        metadata = dict(
+            extracted.get("metadata") or {}
+        )
+
         metadata["repository"] = "Gmail"
         metadata["storage_relative_path"] = self.relative_key(path)
-        metadata["raw_size"] = email.get("raw_size", stat["size_bytes"])
+        metadata["raw_size"] = email.get(
+            "raw_size",
+            stat["size_bytes"],
+        )
 
         self.upsert_document(
             source_type="GMAIL_MESSAGE",
@@ -701,43 +937,65 @@ class UnifiedIndexer:
             parent_source_key=None,
             name=path.name,
             file_path=str(path.resolve()),
-            mime_type=extracted.get("mime_type") or "message/rfc822",
+            mime_type=(
+                extracted.get("mime_type")
+                or "message/rfc822"
+            ),
             extension=path.suffix.lower(),
             size_bytes=stat["size_bytes"],
             modified_at=stat["modified_at"],
             source_hash=source_hash,
             content_text=extracted.get("text") or "",
-            extraction_status=extracted.get("status") or "SUCCESS",
-            extraction_method=extracted.get("method") or "email-mime",
+            extraction_status=(
+                extracted.get("status")
+                or "SUCCESS"
+            ),
+            extraction_method=(
+                extracted.get("method")
+                or "email-mime"
+            ),
             extraction_error=extracted.get("error"),
             metadata=metadata,
         )
 
         attachment_errors = 0
 
-        for attachment in email.get("attachments", []):
+        for attachment in email.get(
+            "attachments",
+            [],
+        ):
             try:
-                attachment_result = self.index_mail_attachment(
-                    parent_source_key=source_key,
-                    message_path=path,
-                    attachment=attachment,
+                attachment_result = (
+                    self.index_mail_attachment(
+                        parent_source_key=source_key,
+                        message_path=path,
+                        attachment=attachment,
+                    )
                 )
+
                 if attachment_result == "ERROR":
                     attachment_errors += 1
+
             except Exception as exc:
-                # A bad/encrypted attachment must never make the parent EML
-                # fail.  index_mail_attachment normally records the error
-                # itself; this outer guard is the final isolation boundary.
+                # A bad/encrypted attachment must never make
+                # the parent EML fail.
                 attachment_errors += 1
+
                 self.log(
-                    f"ATTACHMENT ERROR: {path.name} | "
+                    f"ATTACHMENT ERROR: "
+                    f"{path.name} | "
                     f"{type(exc).__name__}: {exc}"
                 )
 
         self.stage_stats["mails"]["processed"] += 1
+
         if attachment_errors:
-            self.stage_stats["mails"]["errors"] += attachment_errors
+            self.stage_stats["mails"]["errors"] += (
+                attachment_errors
+            )
+
             return "INDEXED_WITH_ATTACHMENT_ERRORS"
+
         return "INDEXED"
 
     def index_mail_attachment(
@@ -748,12 +1006,25 @@ class UnifiedIndexer:
         attachment: dict[str, Any],
     ) -> str:
         data = attachment.get("bytes") or b""
-        file_name = str(attachment.get("file_name") or "attachment")
-        attachment_hash = hashlib.sha256(data).hexdigest()
+
+        file_name = str(
+            attachment.get("file_name")
+            or "attachment"
+        )
+
+        attachment_hash = hashlib.sha256(
+            data
+        ).hexdigest()
+
         source_key = (
             parent_source_key
             + ":attachment:"
-            + str(attachment.get("part_number", 0))
+            + str(
+                attachment.get(
+                    "part_number",
+                    0,
+                )
+            )
             + ":"
             + file_name
             + ":"
@@ -761,11 +1032,14 @@ class UnifiedIndexer:
         )
 
         existing = self.get_existing(source_key)
+
         if (
             existing
             and existing["source_hash"] == attachment_hash
-            and existing["extractor_version"] == EXTRACTOR_VERSION
-            and existing["extraction_status"] in {
+            and existing["extractor_version"]
+            == EXTRACTOR_VERSION
+            and existing["extraction_status"]
+            in {
                 "SUCCESS",
                 "UNSUPPORTED",
                 "ENCRYPTED",
@@ -773,87 +1047,247 @@ class UnifiedIndexer:
         ):
             return "SKIPPED"
 
-        suffix = Path(file_name).suffix.lower()
-        temp_root = PROJECT_ROOT / "storage" / ".index_tmp"
-        temp_root.mkdir(parents=True, exist_ok=True)
-        temp_path = temp_root / (attachment_hash + (suffix or ".bin"))
+        suffix = Path(
+            file_name
+        ).suffix.lower()
 
-        metadata = dict(attachment.get("metadata") or {})
+        temp_root = (
+            PROJECT_ROOT
+            / "storage"
+            / ".index_tmp"
+        )
+
+        temp_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        temp_path = (
+            temp_root
+            / (
+                attachment_hash
+                + (
+                    suffix
+                    or ".bin"
+                )
+            )
+        )
+
+        # --------------------------------------------------------------
+        # IMPORTANT FIX:
+        #
+        # The attachment is physically stored under:
+        #
+        #   storage/gmail/<account>/attachments/
+        #
+        # while the EML is under:
+        #
+        #   storage/gmail/<account>/messages/
+        #
+        # Therefore the DB file_path must point to the actual
+        # attachment file, not to message_path.
+        # --------------------------------------------------------------
+
+        local_attachment_path = (
+            self.find_local_gmail_attachment(
+                message_path=message_path,
+                file_name=file_name,
+                attachment_hash=attachment_hash,
+            )
+        )
+
+        if local_attachment_path is not None:
+            attachment_file_path = str(
+                local_attachment_path
+            )
+        else:
+            # Keep the existing indexing/extraction behavior even if
+            # the physical attachment cannot currently be located.
+            #
+            # The attachment itself is still extracted from the bytes
+            # supplied by document_extractor.
+            attachment_file_path = str(
+                message_path.resolve()
+            )
+
+            self.log(
+                "ATTACHMENT LOCAL FILE NOT FOUND: "
+                f"{file_name} | "
+                f"message={message_path.name} | "
+                f"expected_root="
+                f"{self.gmail_attachment_root(message_path)}"
+            )
+
+        metadata = dict(
+            attachment.get("metadata") or {}
+        )
+
         metadata.update(
             {
                 "repository": "Gmail",
-                "parent_message": str(message_path.resolve()),
+                "parent_message": str(
+                    message_path.resolve()
+                ),
                 "attachment_hash": attachment_hash,
-                "part_number": attachment.get("part_number"),
+                "part_number": attachment.get(
+                    "part_number"
+                ),
+                "attachment_local_path": (
+                    attachment_file_path
+                ),
             }
         )
 
         try:
             temp_path.write_bytes(data)
-            extracted = extract_document(temp_path)
+
+            extracted = extract_document(
+                temp_path
+            )
+
+            # Use the real attachment file's timestamp when
+            # available. Otherwise fall back to the EML timestamp.
+            if local_attachment_path is not None:
+                try:
+                    attachment_stat = (
+                        self.stat_metadata(
+                            local_attachment_path
+                        )
+                    )
+
+                    attachment_modified_at = (
+                        attachment_stat[
+                            "modified_at"
+                        ]
+                    )
+
+                except Exception:
+                    attachment_modified_at = (
+                        self.stat_metadata(
+                            message_path
+                        )["modified_at"]
+                    )
+            else:
+                attachment_modified_at = (
+                    self.stat_metadata(
+                        message_path
+                    )["modified_at"]
+                )
 
             self.upsert_document(
                 source_type="GMAIL_ATTACHMENT",
                 source_key=source_key,
                 parent_source_key=parent_source_key,
                 name=file_name,
-                file_path=str(message_path.resolve()),
+                file_path=attachment_file_path,
                 mime_type=str(
-                    attachment.get("mime_type")
-                    or mimetypes.guess_type(file_name)[0]
+                    attachment.get(
+                        "mime_type"
+                    )
+                    or mimetypes.guess_type(
+                        file_name
+                    )[0]
                     or "application/octet-stream"
                 ),
                 extension=suffix,
                 size_bytes=len(data),
-                modified_at=self.stat_metadata(message_path)["modified_at"],
+                modified_at=attachment_modified_at,
                 source_hash=attachment_hash,
-                content_text=extracted.get("text") or "",
-                extraction_status=extracted.get("status") or "SUCCESS",
-                extraction_method=extracted.get("method") or "attachment",
-                extraction_error=extracted.get("error"),
+                content_text=(
+                    extracted.get("text")
+                    or ""
+                ),
+                extraction_status=(
+                    extracted.get("status")
+                    or "SUCCESS"
+                ),
+                extraction_method=(
+                    extracted.get("method")
+                    or "attachment"
+                ),
+                extraction_error=extracted.get(
+                    "error"
+                ),
                 metadata=metadata,
             )
 
-            status = str(extracted.get("status") or "SUCCESS").upper()
+            status = str(
+                extracted.get("status")
+                or "SUCCESS"
+            ).upper()
+
             if status == "ENCRYPTED":
                 self.log(
-                    f"ATTACHMENT ENCRYPTED: {file_name} | "
-                    f"{message_path.name} | לא ניתן לפענח ללא סיסמה"
-                )
-            elif status == "UNSUPPORTED":
-                self.log(
-                    f"ATTACHMENT UNSUPPORTED: {file_name} | {message_path.name}"
-                )
-            elif status != "SUCCESS":
-                self.log(
-                    f"ATTACHMENT STATUS {status}: {file_name} | {message_path.name}"
+                    "ATTACHMENT ENCRYPTED: "
+                    f"{file_name} | "
+                    f"{message_path.name} | "
+                    "לא ניתן לפענח ללא סיסמה"
                 )
 
-            return "ERROR" if status == "ERROR" else status
+            elif status == "UNSUPPORTED":
+                self.log(
+                    "ATTACHMENT UNSUPPORTED: "
+                    f"{file_name} | "
+                    f"{message_path.name}"
+                )
+
+            elif status != "SUCCESS":
+                self.log(
+                    "ATTACHMENT STATUS "
+                    f"{status}: "
+                    f"{file_name} | "
+                    f"{message_path.name}"
+                )
+
+            return (
+                "ERROR"
+                if status == "ERROR"
+                else status
+            )
 
         except Exception as exc:
             error_type = type(exc).__name__
-            error_message = str(exc) or error_type
-            status = "ENCRYPTED" if error_type == "FileNotDecryptedError" else "ERROR"
+            error_message = (
+                str(exc)
+                or error_type
+            )
+
+            status = (
+                "ENCRYPTED"
+                if error_type
+                == "FileNotDecryptedError"
+                else "ERROR"
+            )
 
             # Persist the attachment failure as its own indexed object.
-            # This keeps the parent email successful and makes the failure
-            # visible/searchable in PostgreSQL for later remediation.
             try:
                 self.upsert_document(
                     source_type="GMAIL_ATTACHMENT",
                     source_key=source_key,
                     parent_source_key=parent_source_key,
                     name=file_name,
-                    file_path=str(message_path.resolve()),
+                    file_path=attachment_file_path,
                     mime_type=str(
-                        attachment.get("mime_type")
-                        or mimetypes.guess_type(file_name)[0]
+                        attachment.get(
+                            "mime_type"
+                        )
+                        or mimetypes.guess_type(
+                            file_name
+                        )[0]
                         or "application/octet-stream"
                     ),
                     extension=suffix,
                     size_bytes=len(data),
-                    modified_at=self.stat_metadata(message_path)["modified_at"],
+                    modified_at=(
+                        self.stat_metadata(
+                            local_attachment_path
+                        )["modified_at"]
+                        if local_attachment_path
+                        is not None
+                        else self.stat_metadata(
+                            message_path
+                        )["modified_at"]
+                    ),
                     source_hash=attachment_hash,
                     content_text="",
                     extraction_status=status,
@@ -861,21 +1295,29 @@ class UnifiedIndexer:
                     extraction_error=error_message,
                     metadata=metadata,
                 )
+
             except Exception as db_exc:
                 self.log(
-                    f"ATTACHMENT DB ERROR: {file_name} | "
-                    f"{type(db_exc).__name__}: {db_exc}"
+                    "ATTACHMENT DB ERROR: "
+                    f"{file_name} | "
+                    f"{type(db_exc).__name__}: "
+                    f"{db_exc}"
                 )
 
             self.log(
-                f"ATTACHMENT {status}: {file_name} | "
-                f"{error_type}: {error_message}"
+                f"ATTACHMENT {status}: "
+                f"{file_name} | "
+                f"{error_type}: "
+                f"{error_message}"
             )
+
             return "ERROR"
 
         finally:
             try:
-                temp_path.unlink(missing_ok=True)
+                temp_path.unlink(
+                    missing_ok=True
+                )
             except Exception:
                 pass
 
@@ -883,62 +1325,135 @@ class UnifiedIndexer:
     # Generic document indexing
     # ------------------------------------------------------------------
 
-    def document_source_type(self, path: Path) -> str:
+    def document_source_type(
+        self,
+        path: Path,
+    ) -> str:
         try:
-            relative = path.resolve().relative_to(PROJECT_ROOT.resolve()).as_posix().lower()
+            relative = (
+                path.resolve()
+                .relative_to(
+                    PROJECT_ROOT.resolve()
+                )
+                .as_posix()
+                .lower()
+            )
+
         except Exception:
             relative = str(path).lower()
 
-        if relative.startswith("storage/drive/"):
+        if relative.startswith(
+            "storage/drive/"
+        ):
             return "GOOGLE_DRIVE_DOCUMENT"
-        if relative.startswith("storage/office/"):
+
+        if relative.startswith(
+            "storage/office/"
+        ):
             return "LOCAL_OFFICE_DOCUMENT"
-        if relative.startswith("storage/documents/"):
+
+        if relative.startswith(
+            "storage/documents/"
+        ):
             return "LOCAL_DOCUMENT"
+
         return "LOCAL_DOCUMENT"
 
-    def index_document_file(self, path: Path) -> str:
-        source_key = "document:" + self.relative_key(path)
+    def index_document_file(
+        self,
+        path: Path,
+    ) -> str:
+        source_key = (
+            "document:"
+            + self.relative_key(path)
+        )
+
         source_hash = self.sha256_file(path)
-        existing = self.get_existing(source_key)
+        existing = self.get_existing(
+            source_key
+        )
 
         if (
             existing
-            and existing["source_hash"] == source_hash
-            and existing["extractor_version"] == EXTRACTOR_VERSION
-            and existing["extraction_status"] in {"SUCCESS", "UNSUPPORTED"}
+            and existing["source_hash"]
+            == source_hash
+            and existing["extractor_version"]
+            == EXTRACTOR_VERSION
+            and existing["extraction_status"]
+            in {
+                "SUCCESS",
+                "UNSUPPORTED",
+            }
         ):
-            self.stage_stats["documents"]["skipped"] += 1
+            self.stage_stats[
+                "documents"
+            ]["skipped"] += 1
+
             return "SKIPPED"
 
         stat = self.stat_metadata(path)
         extracted = extract_document(path)
 
-        metadata = dict(extracted.get("metadata") or {})
-        metadata["repository"] = self.document_source_type(path)
-        metadata["storage_relative_path"] = self.relative_key(path)
+        metadata = dict(
+            extracted.get("metadata") or {}
+        )
+
+        metadata["repository"] = (
+            self.document_source_type(path)
+        )
+
+        metadata["storage_relative_path"] = (
+            self.relative_key(path)
+        )
+
         metadata["name"] = path.name
-        metadata["extension"] = path.suffix.lower()
+        metadata["extension"] = (
+            path.suffix.lower()
+        )
 
         self.upsert_document(
-            source_type=self.document_source_type(path),
+            source_type=self.document_source_type(
+                path
+            ),
             source_key=source_key,
             parent_source_key=None,
             name=path.name,
-            file_path=str(path.resolve()),
-            mime_type=extracted.get("mime_type") or mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+            file_path=str(
+                path.resolve()
+            ),
+            mime_type=(
+                extracted.get("mime_type")
+                or mimetypes.guess_type(
+                    path.name
+                )[0]
+                or "application/octet-stream"
+            ),
             extension=path.suffix.lower(),
             size_bytes=stat["size_bytes"],
             modified_at=stat["modified_at"],
             source_hash=source_hash,
-            content_text=extracted.get("text") or "",
-            extraction_status=extracted.get("status") or "SUCCESS",
-            extraction_method=extracted.get("method") or "unknown",
-            extraction_error=extracted.get("error"),
+            content_text=(
+                extracted.get("text")
+                or ""
+            ),
+            extraction_status=(
+                extracted.get("status")
+                or "SUCCESS"
+            ),
+            extraction_method=(
+                extracted.get("method")
+                or "unknown"
+            ),
+            extraction_error=extracted.get(
+                "error"
+            ),
             metadata=metadata,
         )
 
-        self.stage_stats["documents"]["processed"] += 1
+        self.stage_stats[
+            "documents"
+        ]["processed"] += 1
+
         return "INDEXED"
 
     # ------------------------------------------------------------------
@@ -946,34 +1461,65 @@ class UnifiedIndexer:
     # ------------------------------------------------------------------
 
     def load_ai_engine(self):
-        provider = os.environ.get("ALCALAY_AI_PROVIDER", "auto").strip().lower()
-        model = os.environ.get("ALCALAY_AI_MODEL", "nomic-embed-text").strip()
+        provider = os.environ.get(
+            "ALCALAY_AI_PROVIDER",
+            "auto",
+        ).strip().lower()
 
-        if provider in {"auto", "ollama"}:
+        model = os.environ.get(
+            "ALCALAY_AI_MODEL",
+            "nomic-embed-text",
+        ).strip()
+
+        if provider in {
+            "auto",
+            "ollama",
+        }:
             try:
-                engine = OllamaEmbeddingEngine(model)
+                engine = OllamaEmbeddingEngine(
+                    model
+                )
+
                 engine.probe()
+
                 return engine
+
             except Exception:
                 if provider == "ollama":
                     raise
 
-        if provider in {"auto", "sentence-transformers", "sentence_transformers", "st"}:
+        if provider in {
+            "auto",
+            "sentence-transformers",
+            "sentence_transformers",
+            "st",
+        }:
             try:
-                engine = SentenceTransformerEmbeddingEngine(model)
+                engine = (
+                    SentenceTransformerEmbeddingEngine(
+                        model
+                    )
+                )
+
                 engine.probe()
+
                 return engine
+
             except Exception:
                 if provider != "auto":
                     raise
 
         raise RuntimeError(
             "לא נמצא מנוע AI סמנטי זמין. "
-            "הגדר ALCALAY_AI_PROVIDER=ollama והפעל מודל embedding מקומי, "
-            "או התקן sentence-transformers ומודל מקומי."
+            "הגדר ALCALAY_AI_PROVIDER=ollama "
+            "והפעל מודל embedding מקומי, "
+            "או התקן sentence-transformers "
+            "ומודל מקומי."
         )
 
-    def iter_ai_documents(self) -> list[dict[str, Any]]:
+    def iter_ai_documents(
+        self,
+    ) -> list[dict[str, Any]]:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -990,12 +1536,14 @@ class UnifiedIndexer:
                   AND LENGTH(BTRIM(content_text)) > 0
                   AND (
                       ai_indexed_at IS NULL
-                      OR ai_content_hash IS DISTINCT FROM content_hash
+                      OR ai_content_hash
+                         IS DISTINCT FROM content_hash
                       OR ai_status <> 'COMPLETED'
                   )
                 ORDER BY id
                 """
             )
+
             rows = cursor.fetchall()
 
         return [
@@ -1021,10 +1569,12 @@ class UnifiedIndexer:
         handler,
     ) -> bool:
         stats = self.stage_stats[stage]
+
         stats["total"] = len(candidates)
         stats["remaining"] = len(candidates)
 
         self.current_stage = stage
+
         self.update_run(
             current_stage=stage,
             total_items=stats["total"],
@@ -1043,14 +1593,20 @@ class UnifiedIndexer:
             remaining=stats["remaining"],
         )
 
-        for index, path in enumerate(candidates, start=1):
+        for index, path in enumerate(
+            candidates,
+            start=1,
+        ):
             if self.stop_event.is_set():
                 self.update_run(
                     status="STOPPED",
                     stop_requested=True,
                     stop_reason="user requested stop",
-                    remaining_items=stats["remaining"],
+                    remaining_items=stats[
+                        "remaining"
+                    ],
                 )
+
                 self.emit(
                     "STOPPED",
                     stage=stage,
@@ -1061,23 +1617,35 @@ class UnifiedIndexer:
                     skipped=stats["skipped"],
                     remaining=stats["remaining"],
                 )
+
                 return False
 
             source_key = (
-                ("gmail:message:" if stage == "mails" else "document:")
+                (
+                    "gmail:message:"
+                    if stage == "mails"
+                    else "document:"
+                )
                 + self.relative_key(path)
             )
+
             self.current_item_key = source_key
             self.current_item_name = path.name
-            self.current_item_path = str(path.resolve())
+            self.current_item_path = str(
+                path.resolve()
+            )
 
             self.update_run(
                 current_stage=stage,
                 current_item_key=source_key,
                 current_item_name=path.name,
-                current_item_path=str(path.resolve()),
+                current_item_path=str(
+                    path.resolve()
+                ),
                 current_item_started_at=self.now(),
-                remaining_items=stats["remaining"],
+                remaining_items=stats[
+                    "remaining"
+                ],
             )
 
             self.emit(
@@ -1095,6 +1663,7 @@ class UnifiedIndexer:
 
             try:
                 result = handler(path)
+
                 if result == "SKIPPED":
                     stats["skipped"] += 1
                 else:
@@ -1102,22 +1671,41 @@ class UnifiedIndexer:
 
                 stats["remaining"] = max(
                     0,
-                    stats["total"] - stats["processed"] - stats["skipped"],
+                    stats["total"]
+                    - stats["processed"]
+                    - stats["skipped"],
                 )
 
-                # Advance the durable checkpoint to the next unprocessed file.
-                next_path = candidates[index] if index < len(candidates) else None
+                next_path = (
+                    candidates[index]
+                    if index < len(candidates)
+                    else None
+                )
+
                 if next_path is None:
                     self.current_item_key = None
                     self.current_item_name = None
                     self.current_item_path = None
+
                 else:
                     self.current_item_key = (
-                        ("gmail:message:" if stage == "mails" else "document:")
-                        + self.relative_key(next_path)
+                        (
+                            "gmail:message:"
+                            if stage == "mails"
+                            else "document:"
+                        )
+                        + self.relative_key(
+                            next_path
+                        )
                     )
-                    self.current_item_name = next_path.name
-                    self.current_item_path = str(next_path.resolve())
+
+                    self.current_item_name = (
+                        next_path.name
+                    )
+
+                    self.current_item_path = str(
+                        next_path.resolve()
+                    )
 
                 self.update_run(
                     current_stage=stage,
@@ -1144,20 +1732,28 @@ class UnifiedIndexer:
 
             except Exception as exc:
                 stats["errors"] += 1
+
                 stats["remaining"] = max(
                     0,
-                    stats["total"] - stats["processed"] - stats["skipped"],
+                    stats["total"]
+                    - stats["processed"]
+                    - stats["skipped"],
                 )
+
                 self.update_run(
                     current_stage=stage,
                     current_item_key=source_key,
                     current_item_name=path.name,
-                    current_item_path=str(path.resolve()),
+                    current_item_path=str(
+                        path.resolve()
+                    ),
                     completed_items=stats["processed"],
                     skipped_items=stats["skipped"],
                     error_count=stats["errors"],
                     remaining_items=stats["remaining"],
-                    last_error=f"{type(exc).__name__}: {exc}",
+                    last_error=(
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 )
 
                 self.emit(
@@ -1168,16 +1764,14 @@ class UnifiedIndexer:
                     source_key=source_key,
                     name=path.name,
                     path=str(path.resolve()),
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=(
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                     error_count=stats["errors"],
                     completed=stats["processed"],
                     skipped=stats["skipped"],
                     remaining=stats["remaining"],
                 )
-
-                # Continue with the next file. The failed file remains
-                # eligible for retry because its extraction status is ERROR
-                # or it has no successful checkpoint.
 
         self.emit(
             "STAGE_FINISH",
@@ -1188,15 +1782,19 @@ class UnifiedIndexer:
             errors=stats["errors"],
             remaining=stats["remaining"],
         )
+
         return True
 
     def run_ai_stage(self) -> bool:
         rows = self.iter_ai_documents()
+
         stats = self.stage_stats["ai"]
+
         stats["total"] = len(rows)
         stats["remaining"] = len(rows)
 
         self.current_stage = "ai"
+
         self.update_run(
             current_stage="ai",
             total_items=stats["total"],
@@ -1225,18 +1823,25 @@ class UnifiedIndexer:
                 errors=0,
                 remaining=0,
             )
+
             return True
 
         engine = self.load_ai_engine()
 
-        for index, row in enumerate(rows, start=1):
+        for index, row in enumerate(
+            rows,
+            start=1,
+        ):
             if self.stop_event.is_set():
                 self.update_run(
                     status="STOPPED",
                     stop_requested=True,
                     stop_reason="user requested stop",
-                    remaining_items=stats["remaining"],
+                    remaining_items=stats[
+                        "remaining"
+                    ],
                 )
+
                 self.emit(
                     "STOPPED",
                     stage="ai",
@@ -1247,11 +1852,20 @@ class UnifiedIndexer:
                     skipped=stats["skipped"],
                     remaining=stats["remaining"],
                 )
+
                 return False
 
-            self.current_item_key = row["source_key"]
-            self.current_item_name = row["name"] or ""
-            self.current_item_path = row["file_path"] or ""
+            self.current_item_key = (
+                row["source_key"]
+            )
+
+            self.current_item_name = (
+                row["name"] or ""
+            )
+
+            self.current_item_path = (
+                row["file_path"] or ""
+            )
 
             self.update_run(
                 current_stage="ai",
@@ -1259,7 +1873,9 @@ class UnifiedIndexer:
                 current_item_name=self.current_item_name,
                 current_item_path=self.current_item_path,
                 current_item_started_at=self.now(),
-                remaining_items=stats["remaining"],
+                remaining_items=stats[
+                    "remaining"
+                ],
             )
 
             self.emit(
@@ -1276,8 +1892,14 @@ class UnifiedIndexer:
             )
 
             try:
-                embedding = engine.embed(row["content_text"])
-                ai_text = engine.describe(row["content_text"])
+                embedding = engine.embed(
+                    row["content_text"]
+                )
+
+                ai_text = engine.describe(
+                    row["content_text"]
+                )
+
                 self.mark_ai_result(
                     document_id=row["id"],
                     content_hash=row["content_hash"],
@@ -1288,19 +1910,32 @@ class UnifiedIndexer:
                 )
 
                 stats["processed"] += 1
+
                 stats["remaining"] = max(
                     0,
-                    stats["total"] - stats["processed"] - stats["skipped"],
+                    stats["total"]
+                    - stats["processed"]
+                    - stats["skipped"],
                 )
 
                 self.current_item_key = None
                 self.current_item_name = None
                 self.current_item_path = None
+
                 if index < len(rows):
                     next_row = rows[index]
-                    self.current_item_key = next_row["source_key"]
-                    self.current_item_name = next_row["name"] or ""
-                    self.current_item_path = next_row["file_path"] or ""
+
+                    self.current_item_key = (
+                        next_row["source_key"]
+                    )
+
+                    self.current_item_name = (
+                        next_row["name"] or ""
+                    )
+
+                    self.current_item_path = (
+                        next_row["file_path"] or ""
+                    )
 
                 self.update_run(
                     current_stage="ai",
@@ -1329,11 +1964,18 @@ class UnifiedIndexer:
 
             except Exception as exc:
                 stats["errors"] += 1
+
                 stats["remaining"] = max(
                     0,
-                    stats["total"] - stats["processed"] - stats["skipped"],
+                    stats["total"]
+                    - stats["processed"]
+                    - stats["skipped"],
                 )
-                self.mark_ai_error(row["id"], f"{type(exc).__name__}: {exc}")
+
+                self.mark_ai_error(
+                    row["id"],
+                    f"{type(exc).__name__}: {exc}",
+                )
 
                 self.update_run(
                     current_stage="ai",
@@ -1342,7 +1984,9 @@ class UnifiedIndexer:
                     current_item_path=row["file_path"] or "",
                     error_count=stats["errors"],
                     remaining_items=stats["remaining"],
-                    last_error=f"{type(exc).__name__}: {exc}",
+                    last_error=(
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                 )
 
                 self.emit(
@@ -1353,7 +1997,9 @@ class UnifiedIndexer:
                     source_key=row["source_key"],
                     name=row["name"] or "",
                     path=row["file_path"] or "",
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=(
+                        f"{type(exc).__name__}: {exc}"
+                    ),
                     error_count=stats["errors"],
                     completed=stats["processed"],
                     skipped=stats["skipped"],
@@ -1369,6 +2015,7 @@ class UnifiedIndexer:
             errors=stats["errors"],
             remaining=stats["remaining"],
         )
+
         return True
 
     # ------------------------------------------------------------------
@@ -1377,7 +2024,9 @@ class UnifiedIndexer:
 
     def run(self) -> int:
         if not self.stages:
-            raise ValueError("No indexing stages selected.")
+            raise ValueError(
+                "No indexing stages selected."
+            )
 
         try:
             self.connect_database()
@@ -1398,6 +2047,7 @@ class UnifiedIndexer:
                         "STOPPED",
                         "user requested stop",
                     )
+
                     self.emit(
                         "RUN_FINISH",
                         status="STOPPED",
@@ -1407,25 +2057,36 @@ class UnifiedIndexer:
                         current_item_name=self.current_item_name,
                         current_item_path=self.current_item_path,
                     )
+
                     return 0
 
                 if stage == "mails":
                     candidates = sorted(
-                        list(self.iter_gmail_messages()),
-                        key=lambda item: str(item).lower(),
+                        list(
+                            self.iter_gmail_messages()
+                        ),
+                        key=lambda item: str(
+                            item
+                        ).lower(),
                     )
+
                     ok = self.run_file_stage(
                         "mails",
                         candidates,
                         self.index_mail_file,
                     )
+
                 elif stage == "documents":
-                    candidates = list(self.iter_document_files())
+                    candidates = list(
+                        self.iter_document_files()
+                    )
+
                     ok = self.run_file_stage(
                         "documents",
                         candidates,
                         self.index_document_file,
                     )
+
                 else:
                     ok = self.run_ai_stage()
 
@@ -1434,6 +2095,7 @@ class UnifiedIndexer:
                         "STOPPED",
                         "user requested stop",
                     )
+
                     self.emit(
                         "RUN_FINISH",
                         status="STOPPED",
@@ -1443,26 +2105,35 @@ class UnifiedIndexer:
                         current_item_name=self.current_item_name,
                         current_item_path=self.current_item_path,
                     )
+
                     return 0
 
             total_processed = sum(
                 item["processed"]
                 for item in self.stage_stats.values()
             )
+
             total_skipped = sum(
                 item["skipped"]
                 for item in self.stage_stats.values()
             )
+
             total_errors = sum(
                 item["errors"]
                 for item in self.stage_stats.values()
             )
+
             total_remaining = sum(
                 item["remaining"]
                 for item in self.stage_stats.values()
             )
 
-            status = "COMPLETED" if total_errors == 0 else "COMPLETED_WITH_ERRORS"
+            status = (
+                "COMPLETED"
+                if total_errors == 0
+                else "COMPLETED_WITH_ERRORS"
+            )
+
             self.update_run(
                 status=status,
                 finished_at=self.now(),
@@ -1470,7 +2141,11 @@ class UnifiedIndexer:
                 current_item_key=None,
                 current_item_name=None,
                 current_item_path=None,
-                total_items=total_processed + total_skipped + total_remaining,
+                total_items=(
+                    total_processed
+                    + total_skipped
+                    + total_remaining
+                ),
                 completed_items=total_processed,
                 skipped_items=total_skipped,
                 error_count=total_errors,
@@ -1486,13 +2161,22 @@ class UnifiedIndexer:
                 errors=total_errors,
                 remaining=total_remaining,
             )
-            return 0 if total_errors == 0 else 1
+
+            return (
+                0
+                if total_errors == 0
+                else 1
+            )
 
         except Exception as exc:
-            error_message = f"{type(exc).__name__}: {exc}"
+            error_message = (
+                f"{type(exc).__name__}: {exc}"
+            )
+
             try:
                 if self.connection is not None:
                     self.connection.rollback()
+
                     self.update_run(
                         status="ERROR",
                         finished_at=self.now(),
@@ -1502,6 +2186,7 @@ class UnifiedIndexer:
                         current_item_name=self.current_item_name,
                         current_item_path=self.current_item_path,
                     )
+
             except Exception:
                 pass
 
@@ -1515,7 +2200,9 @@ class UnifiedIndexer:
                 current_item_name=self.current_item_name,
                 current_item_path=self.current_item_path,
             )
+
             return 1
+
         finally:
             if self.connection is not None:
                 self.connection.close()
@@ -1526,40 +2213,73 @@ class OllamaEmbeddingEngine:
     provider = "ollama"
 
     def __init__(self, model: str) -> None:
-        self.model = model or "nomic-embed-text"
+        self.model = (
+            model
+            or "nomic-embed-text"
+        )
+
         self.base_url = os.environ.get(
             "ALCALAY_OLLAMA_URL",
             "http://127.0.0.1:11434",
         ).rstrip("/")
 
-    def _request(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        import urllib.error
+    def _request(
+        self,
+        path: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         import urllib.request
 
         request = urllib.request.Request(
             self.base_url + path,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            data=json.dumps(
+                payload
+            ).encode("utf-8"),
+            headers={
+                "Content-Type":
+                    "application/json"
+            },
             method="POST",
         )
 
-        with urllib.request.urlopen(request, timeout=120) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with urllib.request.urlopen(
+            request,
+            timeout=120,
+        ) as response:
+            return json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
 
     def probe(self) -> None:
         self.embed("health check")
 
-    def embed(self, text: str) -> list[float]:
+    def embed(
+        self,
+        text: str,
+    ) -> list[float]:
         payload = {
             "model": self.model,
             "input": text[:12000],
         }
 
         try:
-            response = self._request("/api/embed", payload)
-            embeddings = response.get("embeddings")
+            response = self._request(
+                "/api/embed",
+                payload,
+            )
+
+            embeddings = response.get(
+                "embeddings"
+            )
+
             if embeddings and embeddings[0]:
-                return [float(value) for value in embeddings[0]]
+                return [
+                    float(value)
+                    for value in embeddings[0]
+                ]
+
         except Exception:
             pass
 
@@ -1570,71 +2290,132 @@ class OllamaEmbeddingEngine:
                 "prompt": text[:12000],
             },
         )
-        embedding = response.get("embedding")
-        if not embedding:
-            raise RuntimeError("Ollama returned no embedding.")
-        return [float(value) for value in embedding]
 
-    def describe(self, text: str) -> str:
-        # Keep AI text compact; the semantic signal is stored in the embedding.
-        words = normalize_text(text).split()
-        return " ".join(words[:120])
+        embedding = response.get(
+            "embedding"
+        )
+
+        if not embedding:
+            raise RuntimeError(
+                "Ollama returned no embedding."
+            )
+
+        return [
+            float(value)
+            for value in embedding
+        ]
+
+    def describe(
+        self,
+        text: str,
+    ) -> str:
+        words = normalize_text(
+            text
+        ).split()
+
+        return " ".join(
+            words[:120]
+        )
 
 
 class SentenceTransformerEmbeddingEngine:
     provider = "sentence-transformers"
 
-    def __init__(self, model: str) -> None:
-        self.model = model or "all-MiniLM-L6-v2"
+    def __init__(
+        self,
+        model: str,
+    ) -> None:
+        self.model = (
+            model
+            or "all-MiniLM-L6-v2"
+        )
+
         self._model = None
 
     def _load(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
+            from sentence_transformers import (
+                SentenceTransformer
+            )
 
-            self._model = SentenceTransformer(self.model)
+            self._model = (
+                SentenceTransformer(
+                    self.model
+                )
+            )
+
         return self._model
 
     def probe(self) -> None:
         self.embed("health check")
 
-    def embed(self, text: str) -> list[float]:
+    def embed(
+        self,
+        text: str,
+    ) -> list[float]:
         model = self._load()
+
         vector = model.encode(
             text[:12000],
             normalize_embeddings=True,
         )
-        return [float(value) for value in vector.tolist()]
 
-    def describe(self, text: str) -> str:
-        words = normalize_text(text).split()
-        return " ".join(words[:120])
+        return [
+            float(value)
+            for value in vector.tolist()
+        ]
+
+    def describe(
+        self,
+        text: str,
+    ) -> str:
+        words = normalize_text(
+            text
+        ).split()
+
+        return " ".join(
+            words[:120]
+        )
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Alcalay unified document indexer")
+    parser = argparse.ArgumentParser(
+        description="Alcalay unified document indexer"
+    )
+
     parser.add_argument(
         "--stages",
         nargs="+",
         required=True,
-        choices=["mails", "documents", "ai"],
+        choices=[
+            "mails",
+            "documents",
+            "ai",
+        ],
         help="Index stages to execute",
     )
+
     parser.add_argument(
         "--start-mode",
-        choices=["fresh", "resume"],
+        choices=[
+            "fresh",
+            "resume",
+        ],
         default="resume",
         help=(
-            "Start mode: fresh starts a new indexing run while resume "
-            "reuses the existing document checkpoints. Both modes avoid "
+            "Start mode: fresh starts a new indexing "
+            "run while resume reuses the existing "
+            "document checkpoints. Both modes avoid "
             "re-extracting unchanged successful items."
         ),
     )
+
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
     return UnifiedIndexer(
         args.stages,
         start_mode=args.start_mode,
