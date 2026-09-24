@@ -123,19 +123,37 @@ def extract_rtf(value: str) -> str:
     return normalize_text(value)
 
 
-def extract_pdf(path: Path) -> tuple[str, str]:
+def extract_pdf(path: Path) -> tuple[str, str, str | None]:
+    """Extract PDF text while treating password-protected PDFs as a normal status."""
     from pypdf import PdfReader
 
-    reader = PdfReader(str(path))
-    pages = []
+    try:
+        reader = PdfReader(str(path), strict=False)
 
-    for page in reader.pages:
-        try:
-            pages.append(page.extract_text() or "")
-        except Exception:
-            pages.append("")
+        if getattr(reader, "is_encrypted", False):
+            try:
+                decrypted = reader.decrypt("")
+            except Exception:
+                decrypted = 0
 
-    return normalize_text("\n\n".join(pages)), "pypdf"
+            if not decrypted:
+                return "", "pypdf", "File has not been decrypted"
+
+        pages = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception as exc:
+                if type(exc).__name__ == "FileNotDecryptedError":
+                    return "", "pypdf", "File has not been decrypted"
+                pages.append("")
+
+        return normalize_text("\n\n".join(pages)), "pypdf", None
+
+    except Exception as exc:
+        if type(exc).__name__ == "FileNotDecryptedError":
+            return "", "pypdf", "File has not been decrypted"
+        raise
 
 
 def extract_docx(path: Path) -> tuple[str, str]:
@@ -343,8 +361,10 @@ def extract_document(path: Path) -> dict[str, Any]:
             "mime_type": mime_type or "message/rfc822",
         }
 
+    extraction_error: str | None = None
+
     if suffix == ".pdf":
-        text, method = extract_pdf(path)
+        text, method, extraction_error = extract_pdf(path)
     elif suffix == ".docx":
         text, method = extract_docx(path)
     elif suffix in {".xlsx", ".xlsm"}:
@@ -379,6 +399,17 @@ def extract_document(path: Path) -> dict[str, Any]:
             "method": method,
             "status": "UNSUPPORTED",
             "error": None,
+            "metadata": {},
+            "email": None,
+            "mime_type": mime_type,
+        }
+
+    if extraction_error:
+        return {
+            "text": "",
+            "method": method,
+            "status": "ENCRYPTED",
+            "error": extraction_error,
             "metadata": {},
             "email": None,
             "mime_type": mime_type,

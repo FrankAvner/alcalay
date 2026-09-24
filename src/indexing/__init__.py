@@ -1,11 +1,7 @@
 # -*- coding: utf-8 -*-
 
-"""
-Alcalay - Unified Indexing Package
-"""
+"""Alcalay unified indexing package."""
 
 from .unified_indexer import UnifiedIndexer
 
-__all__ = [
-    "UnifiedIndexer",
-]
+__all__ = ["UnifiedIndexer"]

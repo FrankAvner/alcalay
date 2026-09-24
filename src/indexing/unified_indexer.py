@@ -59,7 +59,7 @@ STOP_WORDS = {"STOP", "QUIT", "EXIT", "עצור"}
 
 
 class UnifiedIndexer:
-    def __init__(self, stages: list[str]) -> None:
+    def __init__(self, stages: list[str], start_mode: str = "resume") -> None:
         normalized = []
         for stage in stages:
             stage = str(stage).strip().lower()
@@ -75,6 +75,10 @@ class UnifiedIndexer:
                 normalized.append(stage)
 
         self.stages = normalized
+        self.start_mode = str(start_mode or "resume").strip().lower()
+        if self.start_mode not in {"fresh", "resume"}:
+            raise ValueError(f"Unsupported start mode: {self.start_mode}")
+
         self.db = DatabaseConnection()
         self.connection = None
         self.stop_event = threading.Event()
@@ -520,7 +524,7 @@ class UnifiedIndexer:
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s,
+                    %s, %s, %s,
                     to_tsvector(
                         'simple',
                         COALESCE(%s, '') || ' ' ||
@@ -678,7 +682,7 @@ class UnifiedIndexer:
             existing
             and existing["source_hash"] == source_hash
             and existing["extractor_version"] == EXTRACTOR_VERSION
-            and existing["extraction_status"] == "SUCCESS"
+            and existing["extraction_status"] in {"SUCCESS", "ENCRYPTED"}
         ):
             self.stage_stats["mails"]["skipped"] += 1
             return "SKIPPED"
@@ -709,14 +713,31 @@ class UnifiedIndexer:
             metadata=metadata,
         )
 
+        attachment_errors = 0
+
         for attachment in email.get("attachments", []):
-            self.index_mail_attachment(
-                parent_source_key=source_key,
-                message_path=path,
-                attachment=attachment,
-            )
+            try:
+                attachment_result = self.index_mail_attachment(
+                    parent_source_key=source_key,
+                    message_path=path,
+                    attachment=attachment,
+                )
+                if attachment_result == "ERROR":
+                    attachment_errors += 1
+            except Exception as exc:
+                # A bad/encrypted attachment must never make the parent EML
+                # fail.  index_mail_attachment normally records the error
+                # itself; this outer guard is the final isolation boundary.
+                attachment_errors += 1
+                self.log(
+                    f"ATTACHMENT ERROR: {path.name} | "
+                    f"{type(exc).__name__}: {exc}"
+                )
 
         self.stage_stats["mails"]["processed"] += 1
+        if attachment_errors:
+            self.stage_stats["mails"]["errors"] += attachment_errors
+            return "INDEXED_WITH_ATTACHMENT_ERRORS"
         return "INDEXED"
 
     def index_mail_attachment(
@@ -725,7 +746,7 @@ class UnifiedIndexer:
         parent_source_key: str,
         message_path: Path,
         attachment: dict[str, Any],
-    ) -> None:
+    ) -> str:
         data = attachment.get("bytes") or b""
         file_name = str(attachment.get("file_name") or "attachment")
         attachment_hash = hashlib.sha256(data).hexdigest()
@@ -744,27 +765,32 @@ class UnifiedIndexer:
             existing
             and existing["source_hash"] == attachment_hash
             and existing["extractor_version"] == EXTRACTOR_VERSION
-            and existing["extraction_status"] in {"SUCCESS", "UNSUPPORTED"}
+            and existing["extraction_status"] in {
+                "SUCCESS",
+                "UNSUPPORTED",
+                "ENCRYPTED",
+            }
         ):
-            return
+            return "SKIPPED"
 
         suffix = Path(file_name).suffix.lower()
         temp_root = PROJECT_ROOT / "storage" / ".index_tmp"
         temp_root.mkdir(parents=True, exist_ok=True)
         temp_path = temp_root / (attachment_hash + (suffix or ".bin"))
 
+        metadata = dict(attachment.get("metadata") or {})
+        metadata.update(
+            {
+                "repository": "Gmail",
+                "parent_message": str(message_path.resolve()),
+                "attachment_hash": attachment_hash,
+                "part_number": attachment.get("part_number"),
+            }
+        )
+
         try:
             temp_path.write_bytes(data)
             extracted = extract_document(temp_path)
-
-            metadata = dict(attachment.get("metadata") or {})
-            metadata.update(
-                {
-                    "repository": "Gmail",
-                    "parent_message": str(message_path.resolve()),
-                    "attachment_hash": attachment_hash,
-                }
-            )
 
             self.upsert_document(
                 source_type="GMAIL_ATTACHMENT",
@@ -772,7 +798,11 @@ class UnifiedIndexer:
                 parent_source_key=parent_source_key,
                 name=file_name,
                 file_path=str(message_path.resolve()),
-                mime_type=str(attachment.get("mime_type") or mimetypes.guess_type(file_name)[0] or "application/octet-stream"),
+                mime_type=str(
+                    attachment.get("mime_type")
+                    or mimetypes.guess_type(file_name)[0]
+                    or "application/octet-stream"
+                ),
                 extension=suffix,
                 size_bytes=len(data),
                 modified_at=self.stat_metadata(message_path)["modified_at"],
@@ -783,6 +813,66 @@ class UnifiedIndexer:
                 extraction_error=extracted.get("error"),
                 metadata=metadata,
             )
+
+            status = str(extracted.get("status") or "SUCCESS").upper()
+            if status == "ENCRYPTED":
+                self.log(
+                    f"ATTACHMENT ENCRYPTED: {file_name} | "
+                    f"{message_path.name} | לא ניתן לפענח ללא סיסמה"
+                )
+            elif status == "UNSUPPORTED":
+                self.log(
+                    f"ATTACHMENT UNSUPPORTED: {file_name} | {message_path.name}"
+                )
+            elif status != "SUCCESS":
+                self.log(
+                    f"ATTACHMENT STATUS {status}: {file_name} | {message_path.name}"
+                )
+
+            return "ERROR" if status == "ERROR" else status
+
+        except Exception as exc:
+            error_type = type(exc).__name__
+            error_message = str(exc) or error_type
+            status = "ENCRYPTED" if error_type == "FileNotDecryptedError" else "ERROR"
+
+            # Persist the attachment failure as its own indexed object.
+            # This keeps the parent email successful and makes the failure
+            # visible/searchable in PostgreSQL for later remediation.
+            try:
+                self.upsert_document(
+                    source_type="GMAIL_ATTACHMENT",
+                    source_key=source_key,
+                    parent_source_key=parent_source_key,
+                    name=file_name,
+                    file_path=str(message_path.resolve()),
+                    mime_type=str(
+                        attachment.get("mime_type")
+                        or mimetypes.guess_type(file_name)[0]
+                        or "application/octet-stream"
+                    ),
+                    extension=suffix,
+                    size_bytes=len(data),
+                    modified_at=self.stat_metadata(message_path)["modified_at"],
+                    source_hash=attachment_hash,
+                    content_text="",
+                    extraction_status=status,
+                    extraction_method="attachment",
+                    extraction_error=error_message,
+                    metadata=metadata,
+                )
+            except Exception as db_exc:
+                self.log(
+                    f"ATTACHMENT DB ERROR: {file_name} | "
+                    f"{type(db_exc).__name__}: {db_exc}"
+                )
+
+            self.log(
+                f"ATTACHMENT {status}: {file_name} | "
+                f"{error_type}: {error_message}"
+            )
+            return "ERROR"
+
         finally:
             try:
                 temp_path.unlink(missing_ok=True)
@@ -1299,6 +1389,7 @@ class UnifiedIndexer:
                 run_id=self.run_id,
                 run_uuid=self.run_uuid,
                 stages=self.stages,
+                start_mode=self.start_mode,
             )
 
             for stage in self.stages:
@@ -1529,12 +1620,25 @@ def parse_args() -> argparse.Namespace:
         choices=["mails", "documents", "ai"],
         help="Index stages to execute",
     )
+    parser.add_argument(
+        "--start-mode",
+        choices=["fresh", "resume"],
+        default="resume",
+        help=(
+            "Start mode: fresh starts a new indexing run while resume "
+            "reuses the existing document checkpoints. Both modes avoid "
+            "re-extracting unchanged successful items."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    return UnifiedIndexer(args.stages).run()
+    return UnifiedIndexer(
+        args.stages,
+        start_mode=args.start_mode,
+    ).run()
 
 
 if __name__ == "__main__":

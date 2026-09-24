@@ -16,10 +16,9 @@ Important:
     - It searches only data already stored locally/PostgreSQL.
     - Future repositories can be added without changing the main search UI.
 
-Current Gmail search sources:
+Current Gmail search source:
 
     public.gmail_search_index
-    public.gmail_attachment_search_index
 """
 
 from __future__ import annotations
@@ -51,16 +50,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SRC_ROOT = PROJECT_ROOT / "src"
-
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
-
-
 from database.connection import DatabaseConnection
 from search.search_result_window import SearchResultWindow
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class SearchWindow(QMainWindow):
@@ -71,8 +65,7 @@ class SearchWindow(QMainWindow):
 
         Gmail / PostgreSQL
 
-    Search is performed only against data already stored
-    and indexed in PostgreSQL.
+    The search is performed against gmail_search_index.
 
     No Gmail API access is performed here.
     """
@@ -83,6 +76,8 @@ class SearchWindow(QMainWindow):
         self.db: Optional[DatabaseConnection] = None
         self.connection = None
         self.results: List[Dict[str, Any]] = []
+        self.all_results: List[Dict[str, Any]] = []
+        self.results_filter_active = False
 
         self.setWindowTitle("Alcalay - חיפוש במאגרים")
         self.setMinimumSize(1250, 820)
@@ -173,6 +168,9 @@ class SearchWindow(QMainWindow):
 
         results_group = self._build_results_group()
         main_layout.addWidget(results_group, 1)
+
+        results_filter_group = self._build_results_filter_group()
+        main_layout.addWidget(results_filter_group)
 
     def _build_source_group(self) -> QGroupBox:
         group = QGroupBox("חיפוש במאגרים")
@@ -279,26 +277,6 @@ class SearchWindow(QMainWindow):
         layout.addWidget(text_label, row, 0)
         layout.addWidget(
             self.text_edit,
-            row,
-            1,
-            1,
-            3,
-        )
-
-        row += 1
-
-        self.search_attachments_checkbox = QCheckBox(
-            "חפש בתוך מסמכים מצורפים"
-        )
-        self.search_attachments_checkbox.setChecked(False)
-
-        self.search_attachments_checkbox.setToolTip(
-            "כאשר מסומן, החיפוש מתבצע גם בתוך תוכן הקבצים "
-            "המצורפים שניתן היה לחלץ מהם טקסט, וכן בשם הקובץ."
-        )
-
-        layout.addWidget(
-            self.search_attachments_checkbox,
             row,
             1,
             1,
@@ -416,12 +394,10 @@ class SearchWindow(QMainWindow):
         row += 1
 
         info_label = QLabel(
-            "החיפוש מתבצע על מידע שכבר עבר PARSE ו-INDEX. "
-            "כאשר האפשרות לחיפוש בצרופות מסומנת, "
-            "החיפוש כולל גם את אינדקס הצרופות."
+            "החיפוש החופשי מתבצע על תוכן ההודעות שכבר עברו "
+            "PARSE ו-INDEX."
         )
         info_label.setAlignment(Qt.AlignRight)
-        info_label.setWordWrap(True)
         info_label.setStyleSheet(
             """
             QLabel {
@@ -441,12 +417,118 @@ class SearchWindow(QMainWindow):
 
         return group
 
+    def _build_results_filter_group(self) -> QGroupBox:
+        group = QGroupBox("חיפוש בתוך התוצאות")
+        layout = QGridLayout(group)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(8)
+
+        row = 0
+
+        label = QLabel("חיפוש מורכב בתוך התוצאות שכבר נמצאו:")
+        label.setAlignment(Qt.AlignRight)
+        layout.addWidget(label, row, 0, 1, 4)
+        row += 1
+
+        self.results_filter_text = QLineEdit()
+        self.results_filter_text.setPlaceholderText(
+            "מילה, ביטוי או מספר – חיפוש בכל תוכן התוצאה"
+        )
+        layout.addWidget(QLabel("טקסט:"), row, 0)
+        layout.addWidget(self.results_filter_text, row, 1)
+
+        self.results_filter_sender = QLineEdit()
+        self.results_filter_sender.setPlaceholderText("שם או כתובת")
+        layout.addWidget(QLabel("שולח:"), row, 2)
+        layout.addWidget(self.results_filter_sender, row, 3)
+        row += 1
+
+        self.results_filter_recipient = QLineEdit()
+        self.results_filter_recipient.setPlaceholderText("שם או כתובת")
+        layout.addWidget(QLabel("נמען:"), row, 0)
+        layout.addWidget(self.results_filter_recipient, row, 1)
+
+        self.results_filter_subject = QLineEdit()
+        self.results_filter_subject.setPlaceholderText("נושא")
+        layout.addWidget(QLabel("נושא:"), row, 2)
+        layout.addWidget(self.results_filter_subject, row, 3)
+        row += 1
+
+        self.results_filter_attachment = QComboBox()
+        self.results_filter_attachment.addItem("הכול", "all")
+        self.results_filter_attachment.addItem("עם קבצים מצורפים", "yes")
+        self.results_filter_attachment.addItem("ללא קבצים מצורפים", "no")
+        layout.addWidget(QLabel("קבצים:"), row, 0)
+        layout.addWidget(self.results_filter_attachment, row, 1)
+
+        self.results_filter_from = QDateEdit()
+        self.results_filter_from.setCalendarPopup(True)
+        self.results_filter_from.setDisplayFormat("dd/MM/yyyy")
+        self.results_filter_from.setSpecialValueText("ללא הגבלה")
+        self.results_filter_from.setDate(self.results_filter_from.minimumDate())
+        self.results_filter_from.setEnabled(False)
+        self.results_filter_from_enabled = QCheckBox("מתאריך")
+        self.results_filter_from_enabled.toggled.connect(
+            self.results_filter_from.setEnabled
+        )
+        from_layout = QHBoxLayout()
+        from_layout.addWidget(self.results_filter_from_enabled)
+        from_layout.addWidget(self.results_filter_from)
+        layout.addWidget(QLabel(""), row, 2)
+        layout.addLayout(from_layout, row, 3)
+        row += 1
+
+        self.results_filter_to = QDateEdit()
+        self.results_filter_to.setCalendarPopup(True)
+        self.results_filter_to.setDisplayFormat("dd/MM/yyyy")
+        self.results_filter_to.setSpecialValueText("ללא הגבלה")
+        self.results_filter_to.setDate(self.results_filter_to.minimumDate())
+        self.results_filter_to.setEnabled(False)
+        self.results_filter_to_enabled = QCheckBox("עד תאריך")
+        self.results_filter_to_enabled.toggled.connect(
+            self.results_filter_to.setEnabled
+        )
+        to_layout = QHBoxLayout()
+        to_layout.addWidget(self.results_filter_to_enabled)
+        to_layout.addWidget(self.results_filter_to)
+        layout.addWidget(QLabel(""), row, 0)
+        layout.addLayout(to_layout, row, 1)
+
+        self.results_filter_button = QPushButton("חיפוש בתוך התוצאות")
+        self.results_filter_button.setMinimumHeight(38)
+        self.results_filter_button.clicked.connect(
+            self._filter_current_results
+        )
+        self.results_filter_button.setEnabled(False)
+
+        self.results_filter_clear_button = QPushButton("ניקוי חיפוש בתוצאות")
+        self.results_filter_clear_button.setMinimumHeight(38)
+        self.results_filter_clear_button.clicked.connect(
+            self._clear_results_filter
+        )
+        self.results_filter_clear_button.setEnabled(False)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(self.results_filter_button)
+        buttons.addWidget(self.results_filter_clear_button)
+        buttons.addStretch()
+        layout.addLayout(buttons, row, 2, 1, 2)
+
+        self.results_filter_status = QLabel(
+            "לאחר חיפוש ראשוני ניתן לצמצם את התוצאות כאן."
+        )
+        self.results_filter_status.setStyleSheet("color: #666666; font-size: 12px;")
+        self.results_filter_status.setAlignment(Qt.AlignRight)
+        layout.addWidget(self.results_filter_status, row + 1, 0, 1, 4)
+
+        return group
+
     def _build_results_group(self) -> QGroupBox:
         group = QGroupBox("תוצאות")
         layout = QVBoxLayout(group)
 
         self.results_table = QTableWidget()
-        self.results_table.setColumnCount(10)
+        self.results_table.setColumnCount(9)
 
         self.results_table.setHorizontalHeaderLabels(
             [
@@ -456,7 +538,6 @@ class SearchWindow(QMainWindow):
                 "נמען",
                 "נושא",
                 "קבצים",
-                "שם צרופה",
                 "מזהה הודעה",
                 "חשבון",
                 "תוכן",
@@ -624,45 +705,34 @@ class SearchWindow(QMainWindow):
         try:
             self.search_button.setEnabled(False)
 
-            if self.search_attachments_checkbox.isChecked():
-                self.status_label.setText(
-                    "מחפש במיילים ובצרופות..."
-                )
-            else:
-                self.status_label.setText(
-                    "מחפש בנתוני Gmail המקומיים..."
-                )
+            self.status_label.setText(
+                "מחפש בנתוני Gmail המקומיים..."
+            )
 
             QApplication.processEvents()
 
-            email_query, email_params = self._build_gmail_query()
+            if (
+                self.from_enabled.isChecked()
+                and self.to_enabled.isChecked()
+                and self.from_date.date() > self.to_date.date()
+            ):
+                raise ValueError("טווח התאריכים אינו תקין: תאריך ההתחלה מאוחר מתאריך הסיום.")
 
-            email_rows = self._execute_gmail_search(
-                email_query,
-                email_params,
+            query, params = self._build_gmail_query()
+
+            rows = self._execute_gmail_search(
+                query,
+                params,
             )
 
-            attachment_rows: List[Dict[str, Any]] = []
-
-            if self.search_attachments_checkbox.isChecked():
-                attachment_query, attachment_params = (
-                    self._build_attachment_query()
-                )
-
-                attachment_rows = self._execute_gmail_search(
-                    attachment_query,
-                    attachment_params,
-                )
-
-            self.results = self._merge_search_results(
-                email_rows,
-                attachment_rows,
-            )
-
+            self.all_results = rows
+            self.results = list(rows)
+            self.results_filter_active = False
+            self._update_results_filter_controls()
             self._display_results()
 
             self.status_label.setText(
-                f"נמצאו {len(self.results):,} תוצאות"
+                f"נמצאו {len(rows):,} תוצאות"
             )
 
         except Exception as exc:
@@ -679,13 +749,11 @@ class SearchWindow(QMainWindow):
         finally:
             self.search_button.setEnabled(True)
 
-    def _build_common_conditions(
-        self,
-        table_alias: str = "g",
-    ):
+    def _build_gmail_query(self):
         conditions: List[str] = []
         params: List[Any] = []
 
+        free_text = self.text_edit.text().strip()
         sender = self.sender_edit.text().strip()
         recipient = self.recipient_edit.text().strip()
         subject = self.subject_edit.text().strip()
@@ -694,12 +762,22 @@ class SearchWindow(QMainWindow):
             self.attachment_combo.currentData()
         )
 
+        if free_text:
+            conditions.append(
+                """
+                search_vector @@
+                websearch_to_tsquery('simple', %s)
+                """
+            )
+
+            params.append(free_text)
+
         if sender:
             conditions.append(
-                f"""
+                """
                 (
-                    {table_alias}.sender_email ILIKE %s
-                    OR {table_alias}.sender_name ILIKE %s
+                    sender_email ILIKE %s
+                    OR sender_name ILIKE %s
                 )
                 """
             )
@@ -715,11 +793,11 @@ class SearchWindow(QMainWindow):
 
         if recipient:
             conditions.append(
-                f"""
+                """
                 (
-                    {table_alias}.recipients::text ILIKE %s
-                    OR {table_alias}.cc_recipients::text ILIKE %s
-                    OR {table_alias}.bcc_recipients::text ILIKE %s
+                    recipients::text ILIKE %s
+                    OR cc_recipients::text ILIKE %s
+                    OR bcc_recipients::text ILIKE %s
                 )
                 """
             )
@@ -736,7 +814,7 @@ class SearchWindow(QMainWindow):
 
         if subject:
             conditions.append(
-                f"{table_alias}.subject ILIKE %s"
+                "subject ILIKE %s"
             )
 
             params.append(
@@ -745,76 +823,23 @@ class SearchWindow(QMainWindow):
 
         if attachment_mode == "yes":
             conditions.append(
-                f"{table_alias}.has_attachments = TRUE"
+                "has_attachments = TRUE"
             )
 
         elif attachment_mode == "no":
             conditions.append(
-                f"{table_alias}.has_attachments = FALSE"
+                "has_attachments = FALSE"
             )
 
         if self.from_enabled.isChecked():
             date_value = self.from_date.date().toPython()
-
-            conditions.append(
-                f"{table_alias}.date_sent >= %s"
-            )
-
-            params.append(
-                datetime(
-                    date_value.year,
-                    date_value.month,
-                    date_value.day,
-                    0,
-                    0,
-                    0,
-                )
-            )
+            conditions.append("date_sent::date >= %s")
+            params.append(date_value)
 
         if self.to_enabled.isChecked():
             date_value = self.to_date.date().toPython()
-
-            conditions.append(
-                f"{table_alias}.date_sent < %s"
-            )
-
-            next_day = date_value + timedelta(days=1)
-
-            params.append(
-                datetime(
-                    next_day.year,
-                    next_day.month,
-                    next_day.day,
-                    0,
-                    0,
-                    0,
-                )
-            )
-
-        return conditions, params
-
-    def _build_gmail_query(self):
-        conditions: List[str] = []
-        params: List[Any] = []
-
-        free_text = self.text_edit.text().strip()
-
-        if free_text:
-            conditions.append(
-                """
-                g.search_vector @@
-                websearch_to_tsquery('simple', %s)
-                """
-            )
-
-            params.append(free_text)
-
-        common_conditions, common_params = (
-            self._build_common_conditions("g")
-        )
-
-        conditions.extend(common_conditions)
-        params.extend(common_params)
+            conditions.append("date_sent::date <= %s")
+            params.append(date_value)
 
         where_clause = ""
 
@@ -826,174 +851,45 @@ class SearchWindow(QMainWindow):
 
         query = f"""
             SELECT
-                g.id,
-                g.gmail_message_id,
-                g.gmail_message_key,
-                g.gmail_account_id,
-                g.mime_message_id,
-                g.thread_id,
-                g.subject,
-                g.sender_name,
-                g.sender_email,
-                g.recipients,
-                g.cc_recipients,
-                g.bcc_recipients,
-                g.date_sent,
-                g.body_text,
-                g.body_html,
-                g.search_text,
-                g.has_attachments,
-                g.attachment_count,
-                g.raw_sha256,
-                g.raw_size,
-                g.parser_version,
-                g.index_version,
-                g.indexed_at,
-                g.updated_at,
-                g.metadata,
-                'email' AS result_type,
-                NULL::bigint AS gmail_attachment_id,
-                NULL::text AS attachment_file_name,
-                NULL::text AS attachment_mime_type,
-                NULL::text AS attachment_local_path,
-                NULL::text AS attachment_extracted_text,
-                NULL::text AS attachment_search_text
-            FROM gmail_search_index AS g
+                id,
+                gmail_message_id,
+                gmail_message_key,
+                gmail_account_id,
+                mime_message_id,
+                thread_id,
+                subject,
+                sender_name,
+                sender_email,
+                recipients,
+                cc_recipients,
+                bcc_recipients,
+                date_sent,
+                body_text,
+                body_html,
+                search_text,
+                has_attachments,
+                attachment_count,
+                raw_sha256,
+                raw_size,
+                parser_version,
+                index_version,
+                indexed_at,
+                updated_at,
+                metadata
+            FROM gmail_search_index
             {where_clause}
-            ORDER BY
-                g.date_sent DESC NULLS LAST,
-                g.id DESC
+            ORDER BY date_sent DESC NULLS LAST, id DESC
             LIMIT 1000
         """
 
         return query, params
-
-    def _build_attachment_query(self):
-        conditions: List[str] = []
-        params: List[Any] = []
-
-        free_text = self.text_edit.text().strip()
-
-        if free_text:
-            conditions.append(
-                """
-                (
-                    a.search_vector @@
-                    websearch_to_tsquery('simple', %s)
-                    OR a.file_name ILIKE %s
-                )
-                """
-            )
-
-            params.append(free_text)
-            params.append(f"%{free_text}%")
-
-        common_conditions, common_params = (
-            self._build_common_conditions("g")
-        )
-
-        conditions.extend(common_conditions)
-        params.extend(common_params)
-
-        where_clause = ""
-
-        if conditions:
-            where_clause = (
-                "WHERE "
-                + " AND ".join(conditions)
-            )
-
-        query = f"""
-            SELECT
-                g.id,
-                g.gmail_message_id,
-                g.gmail_message_key,
-                g.gmail_account_id,
-                g.mime_message_id,
-                g.thread_id,
-                g.subject,
-                g.sender_name,
-                g.sender_email,
-                g.recipients,
-                g.cc_recipients,
-                g.bcc_recipients,
-                g.date_sent,
-                g.body_text,
-                g.body_html,
-                g.search_text,
-                g.has_attachments,
-                g.attachment_count,
-                g.raw_sha256,
-                g.raw_size,
-                g.parser_version,
-                g.index_version,
-                g.indexed_at,
-                g.updated_at,
-                g.metadata,
-
-                'attachment' AS result_type,
-
-                a.gmail_attachment_id,
-                a.file_name AS attachment_file_name,
-                a.mime_type AS attachment_mime_type,
-                a.local_path AS attachment_local_path,
-                a.extracted_text AS attachment_extracted_text,
-                a.search_text AS attachment_search_text
-
-            FROM gmail_attachment_search_index AS a
-            INNER JOIN gmail_search_index AS g
-                ON g.gmail_message_id = a.gmail_message_id
-
-            {where_clause}
-
-            ORDER BY
-                g.date_sent DESC NULLS LAST,
-                a.id DESC
-
-            LIMIT 1000
-        """
-
-        return query, params
-
-    def _merge_search_results(
-        self,
-        email_rows: List[Dict[str, Any]],
-        attachment_rows: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        results: List[Dict[str, Any]] = []
-
-        results.extend(email_rows)
-        results.extend(attachment_rows)
-
-        results.sort(
-            key=self._result_sort_key,
-            reverse=True,
-        )
-
-        return results[:2000]
-
-    def _result_sort_key(
-        self,
-        result: Dict[str, Any],
-    ):
-        date_value = result.get("date_sent")
-
-        if isinstance(date_value, datetime):
-            return (
-                date_value,
-                result.get("id") or 0,
-            )
-
-        return (
-            datetime.min,
-            result.get("id") or 0,
-        )
 
     def _execute_gmail_search(
         self,
         query: str,
         params: List[Any],
     ) -> List[Dict[str, Any]]:
+
         connection = self._get_connection()
 
         if connection is None:
@@ -1036,6 +932,133 @@ class SearchWindow(QMainWindow):
             if cursor is not None:
                 cursor.close()
 
+    def _update_results_filter_controls(self) -> None:
+        has_results = bool(self.all_results)
+        self.results_filter_button.setEnabled(has_results)
+        self.results_filter_clear_button.setEnabled(has_results and self.results_filter_active)
+
+        if has_results:
+            self.results_filter_status.setText(
+                f"קיימות {len(self.all_results):,} תוצאות בסיס לחיפוש בתוך התוצאות."
+            )
+        else:
+            self.results_filter_status.setText(
+                "לאחר חיפוש ראשוני ניתן לצמצם את התוצאות כאן."
+            )
+
+    def _filter_current_results(self) -> None:
+        if not self.all_results:
+            return
+
+        text = self.results_filter_text.text().strip().casefold()
+        sender = self.results_filter_sender.text().strip().casefold()
+        recipient = self.results_filter_recipient.text().strip().casefold()
+        subject = self.results_filter_subject.text().strip().casefold()
+        attachment_mode = self.results_filter_attachment.currentData()
+
+        from_date = (
+            self.results_filter_from.date().toPython()
+            if self.results_filter_from_enabled.isChecked()
+            else None
+        )
+        to_date = (
+            self.results_filter_to.date().toPython()
+            if self.results_filter_to_enabled.isChecked()
+            else None
+        )
+
+        if from_date and to_date and from_date > to_date:
+            QMessageBox.warning(
+                self,
+                "חיפוש בתוך התוצאות",
+                "טווח התאריכים אינו תקין: תאריך ההתחלה מאוחר מתאריך הסיום.",
+            )
+            return
+
+        filtered = []
+
+        for result in self.all_results:
+            haystack = " ".join(
+                [
+                    self._safe_text(result.get("subject")),
+                    self._sender_text(result),
+                    self._recipients_text(result),
+                    self._safe_text(result.get("body_text")),
+                    self._safe_text(result.get("body_html")),
+                    self._safe_text(result.get("search_text")),
+                    self._safe_text(result.get("gmail_message_key")),
+                    self._safe_text(result.get("mime_message_id")),
+                    self._safe_text(result.get("thread_id")),
+                ]
+            ).casefold()
+
+            if text and text not in haystack:
+                continue
+
+            sender_text = self._sender_text(result).casefold()
+            if sender and sender not in sender_text:
+                continue
+
+            recipient_text = self._recipients_text(result).casefold()
+            cc_text = self._json_to_text(result.get("cc_recipients")).casefold()
+            bcc_text = self._json_to_text(result.get("bcc_recipients")).casefold()
+            if recipient and recipient not in " ".join([recipient_text, cc_text, bcc_text]):
+                continue
+
+            if subject and subject not in self._safe_text(result.get("subject")).casefold():
+                continue
+
+            has_attachments = bool(result.get("has_attachments"))
+            if attachment_mode == "yes" and not has_attachments:
+                continue
+            if attachment_mode == "no" and has_attachments:
+                continue
+
+            result_date = result.get("date_sent")
+            if result_date is not None:
+                try:
+                    result_date = result_date.date() if isinstance(result_date, datetime) else result_date
+                    if from_date and result_date < from_date:
+                        continue
+                    if to_date and result_date > to_date:
+                        continue
+                except Exception:
+                    if from_date or to_date:
+                        continue
+            elif from_date or to_date:
+                continue
+
+            filtered.append(result)
+
+        self.results = filtered
+        self.results_filter_active = True
+        self._display_results()
+        self.results_filter_clear_button.setEnabled(True)
+        self.results_filter_status.setText(
+            f"מוצגות {len(filtered):,} מתוך {len(self.all_results):,} תוצאות בסיס."
+        )
+        self.status_label.setText(
+            f"חיפוש בתוך התוצאות: {len(filtered):,} תוצאות"
+        )
+
+    def _clear_results_filter(self) -> None:
+        self.results = list(self.all_results)
+        self.results_filter_active = False
+
+        self.results_filter_text.clear()
+        self.results_filter_sender.clear()
+        self.results_filter_recipient.clear()
+        self.results_filter_subject.clear()
+        self.results_filter_attachment.setCurrentIndex(0)
+        self.results_filter_from_enabled.setChecked(False)
+        self.results_filter_to_enabled.setChecked(False)
+
+        self._display_results()
+        self._update_results_filter_controls()
+        self.status_label.setText(
+            f"נמצאו {len(self.results):,} תוצאות"
+        )
+
     # ------------------------------------------------------------------
     # Results
     # ------------------------------------------------------------------
@@ -1050,17 +1073,8 @@ class SearchWindow(QMainWindow):
                 row_index
             )
 
-            result_type = result.get(
-                "result_type"
-            )
-
-            if result_type == "attachment":
-                source_text = "Gmail / צרופה"
-            else:
-                source_text = "Gmail"
-
             source_item = QTableWidgetItem(
-                source_text
+                "Gmail"
             )
 
             date_item = QTableWidgetItem(
@@ -1099,18 +1113,6 @@ class SearchWindow(QMainWindow):
                 attachment_text
             )
 
-            attachment_name = (
-                self._safe_text(
-                    result.get(
-                        "attachment_file_name"
-                    )
-                )
-            )
-
-            attachment_name_item = QTableWidgetItem(
-                attachment_name
-            )
-
             message_id_item = QTableWidgetItem(
                 self._safe_text(
                     result.get(
@@ -1127,27 +1129,12 @@ class SearchWindow(QMainWindow):
                 )
             )
 
-            if result_type == "attachment":
-                content = (
-                    result.get(
-                        "attachment_extracted_text"
-                    )
-                    or result.get(
-                        "attachment_search_text"
-                    )
-                    or result.get(
-                        "body_text"
-                    )
-                )
-            else:
-                content = result.get(
-                    "body_text"
-                )
+            content = result.get("body_text")
 
-                if not content:
-                    content = result.get(
-                        "search_text"
-                    )
+            if not content:
+                content = result.get(
+                    "search_text"
+                )
 
             content_item = QTableWidgetItem(
                 self._make_preview(content)
@@ -1160,7 +1147,6 @@ class SearchWindow(QMainWindow):
                 recipient_item,
                 subject_item,
                 attachment_item,
-                attachment_name_item,
                 message_id_item,
                 account_item,
                 content_item,
@@ -1181,16 +1167,15 @@ class SearchWindow(QMainWindow):
         self.results_table.resizeColumnsToContents()
 
         widths = {
-            0: 120,
+            0: 100,
             1: 150,
             2: 220,
             3: 260,
             4: 300,
             5: 100,
-            6: 260,
-            7: 240,
-            8: 100,
-            9: 450,
+            6: 240,
+            7: 100,
+            8: 450,
         }
 
         for column, width in widths.items():
@@ -1208,6 +1193,7 @@ class SearchWindow(QMainWindow):
         row: int,
         column: int,
     ) -> None:
+
         if row < 0:
             return
 
@@ -1234,130 +1220,73 @@ class SearchWindow(QMainWindow):
         self,
         result: Dict[str, Any],
     ) -> str:
+
         lines: List[str] = []
 
-        result_type = result.get(
-            "result_type"
-        )
-
-        if result_type == "attachment":
-            lines.append(
-                "מקור: Gmail / צרופה"
-            )
-
-            lines.append(
-                f"שם צרופה: "
-                f"{self._safe_text(result.get('attachment_file_name'))}"
-            )
-
-            lines.append(
-                f"סוג: "
-                f"{self._safe_text(result.get('attachment_mime_type'))}"
-            )
-
-            lines.append(
-                f"נתיב מקומי: "
-                f"{self._safe_text(result.get('attachment_local_path'))}"
-            )
-        else:
-            lines.append(
-                "מקור: Gmail / PostgreSQL"
-            )
-
         lines.append(
-            f"תאריך: "
-            f"{self._format_datetime(result.get('date_sent'))}"
+            "מקור: Gmail / PostgreSQL"
         )
 
         lines.append(
-            f"שולח: "
-            f"{self._sender_text(result)}"
+            f"תאריך: {self._format_datetime(result.get('date_sent'))}"
         )
 
         lines.append(
-            f"נמען: "
-            f"{self._recipients_text(result)}"
+            f"שולח: {self._sender_text(result)}"
         )
 
         lines.append(
-            f"נושא: "
-            f"{self._safe_text(result.get('subject'))}"
+            f"נמען: {self._recipients_text(result)}"
         )
 
         lines.append(
-            f"Message Key: "
-            f"{self._safe_text(result.get('gmail_message_key'))}"
+            f"נושא: {self._safe_text(result.get('subject'))}"
         )
 
         lines.append(
-            f"Thread ID: "
-            f"{self._safe_text(result.get('thread_id'))}"
+            f"Message Key: {self._safe_text(result.get('gmail_message_key'))}"
         )
 
         lines.append(
-            f"Message ID: "
-            f"{self._safe_text(result.get('mime_message_id'))}"
+            f"Thread ID: {self._safe_text(result.get('thread_id'))}"
         )
 
         lines.append(
-            f"מצורפים: "
-            f"{'כן' if result.get('has_attachments') else 'לא'}"
+            f"Message ID: {self._safe_text(result.get('mime_message_id'))}"
         )
 
         lines.append(
-            f"מספר מצורפים: "
-            f"{result.get('attachment_count') or 0}"
+            f"מצורפים: {'כן' if result.get('has_attachments') else 'לא'}"
         )
 
         lines.append(
-            f"SHA256: "
-            f"{self._safe_text(result.get('raw_sha256'))}"
+            f"מספר מצורפים: {result.get('attachment_count') or 0}"
         )
 
         lines.append(
-            f"גרסת PARSE: "
-            f"{self._safe_text(result.get('parser_version'))}"
+            f"SHA256: {self._safe_text(result.get('raw_sha256'))}"
         )
 
         lines.append(
-            f"גרסת INDEX: "
-            f"{self._safe_text(result.get('index_version'))}"
+            f"גרסת PARSE: {self._safe_text(result.get('parser_version'))}"
+        )
+
+        lines.append(
+            f"גרסת INDEX: {self._safe_text(result.get('index_version'))}"
         )
 
         lines.append("")
 
-        if result_type == "attachment":
-            lines.append(
-                "תוכן הצרופה:"
-            )
+        lines.append(
+            "תוכן:"
+        )
 
-            attachment_content = (
-                result.get(
-                    "attachment_extracted_text"
-                )
-                or result.get(
-                    "attachment_search_text"
-                )
+        lines.append(
+            self._safe_text(
+                result.get("body_text")
+                or result.get("search_text")
             )
-
-            lines.append(
-                self._safe_text(
-                    attachment_content
-                    or "לא חולץ טקסט מהצרופה."
-                )
-            )
-
-        else:
-            lines.append(
-                "תוכן:"
-            )
-
-            lines.append(
-                self._safe_text(
-                    result.get("body_text")
-                    or result.get("search_text")
-                )
-            )
+        )
 
         metadata = result.get("metadata")
 
@@ -1392,10 +1321,6 @@ class SearchWindow(QMainWindow):
         self.recipient_edit.clear()
         self.subject_edit.clear()
 
-        self.search_attachments_checkbox.setChecked(
-            False
-        )
-
         self.attachment_combo.setCurrentIndex(
             0
         )
@@ -1404,7 +1329,18 @@ class SearchWindow(QMainWindow):
         self.to_enabled.setChecked(False)
 
         self.results = []
+        self.all_results = []
+        self.results_filter_active = False
         self.results_table.setRowCount(0)
+
+        self.results_filter_text.clear()
+        self.results_filter_sender.clear()
+        self.results_filter_recipient.clear()
+        self.results_filter_subject.clear()
+        self.results_filter_attachment.setCurrentIndex(0)
+        self.results_filter_from_enabled.setChecked(False)
+        self.results_filter_to_enabled.setChecked(False)
+        self._update_results_filter_controls()
 
         self.status_label.setText(
             "מוכן לחיפוש"
@@ -1433,6 +1369,7 @@ class SearchWindow(QMainWindow):
         self,
         value: Any,
     ) -> str:
+
         if value is None:
             return ""
 
@@ -1447,6 +1384,7 @@ class SearchWindow(QMainWindow):
         self,
         result: Dict[str, Any],
     ) -> str:
+
         name = self._safe_text(
             result.get("sender_name")
         )
@@ -1464,6 +1402,7 @@ class SearchWindow(QMainWindow):
         self,
         result: Dict[str, Any],
     ) -> str:
+
         recipients = result.get(
             "recipients"
         )
@@ -1488,6 +1427,7 @@ class SearchWindow(QMainWindow):
         self,
         value: Any,
     ) -> str:
+
         if value is None:
             return ""
 
@@ -1568,6 +1508,7 @@ class SearchWindow(QMainWindow):
         value: Any,
         maximum: int = 350,
     ) -> str:
+
         text = self._safe_text(value)
 
         text = " ".join(
