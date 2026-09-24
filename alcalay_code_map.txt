@@ -1,0 +1,2484 @@
+src/ui/main_window.py:3:import os
+src/ui/main_window.py:4:import re
+src/ui/main_window.py:5:import sys
+src/ui/main_window.py:6:from pathlib import Path
+src/ui/main_window.py:8:from PySide6.QtCore import Qt, QProcess, QProcessEnvironment, QTimer
+src/ui/main_window.py:9:from PySide6.QtGui import QTextCursor
+src/ui/main_window.py:10:from PySide6.QtWidgets import (
+src/ui/main_window.py:20:    QPushButton,
+src/ui/main_window.py:31:from database.connection import DatabaseConnection
+src/ui/main_window.py:32:from gmail.gmail_connection import GmailConnection
+src/ui/main_window.py:33:from gmail.gmail_window import GmailWindow
+src/ui/main_window.py:34:from search.search_window import SearchWindow
+src/ui/main_window.py:40:DEFAULT_GMAIL_ACCOUNT = "frank.avner@gmail.com"
+src/ui/main_window.py:42:DIRECTION_DRIVE_TO_LOCAL = "DRIVE_TO_LOCAL"
+src/ui/main_window.py:43:DIRECTION_LOCAL_TO_DRIVE = "LOCAL_TO_DRIVE"
+src/ui/main_window.py:47:# Gmail Import Window
+src/ui/main_window.py:50:class GmailImportWindow(QDialog):
+src/ui/main_window.py:54:        self.setWindowTitle("Alcalay - Gmail Import")
+src/ui/main_window.py:70:        title = QLabel("Gmail Import")
+src/ui/main_window.py:76:        self.status_label = QLabel("טוען תוויות Gmail...")
+src/ui/main_window.py:85:        self.start_button = QPushButton("התחל COPY")
+src/ui/main_window.py:86:        self.start_button.clicked.connect(self.start_copy)
+src/ui/main_window.py:89:        self.stop_button = QPushButton("עצור")
+src/ui/main_window.py:91:        self.stop_button.clicked.connect(self.stop_process)
+src/ui/main_window.py:94:        self.close_button = QPushButton("סגור")
+src/ui/main_window.py:95:        self.close_button.clicked.connect(self.close)
+src/ui/main_window.py:110:            db = DatabaseConnection()
+src/ui/main_window.py:111:            labels = db.get_enabled_gmail_labels()
+src/ui/main_window.py:120:            self.status_label.setText("לא נמצאו Gmail Labels פעילים.")
+src/ui/main_window.py:129:                    or label.get("gmail_label")
+src/ui/main_window.py:134:                    or label.get("gmail_label_id")
+src/ui/main_window.py:154:            f"נמצאו {self.labels_list.count()} תוויות Gmail פעילות."
+src/ui/main_window.py:169:            QMessageBox.warning(self, "Gmail", "תהליך COPY כבר פועל.")
+src/ui/main_window.py:177:                "Gmail",
+src/ui/main_window.py:184:        self.process = QProcess(self)
+src/ui/main_window.py:185:        self.process.setProcessChannelMode(QProcess.MergedChannels)
+src/ui/main_window.py:187:        env = QProcessEnvironment.systemEnvironment()
+src/ui/main_window.py:203:        self.process.readyReadStandardOutput.connect(self.read_output)
+src/ui/main_window.py:204:        self.process.finished.connect(self.process_finished)
+src/ui/main_window.py:206:        script = PROJECT_ROOT / "src" / "gmail" / "gmail_copy.py"
+src/ui/main_window.py:210:        self.log("Starting Gmail COPY")
+src/ui/main_window.py:279:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:289:        if self.process.state() == QProcess.Running:
+src/ui/main_window.py:300:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:307:            f"Gmail COPY finished. exit_code={exit_code}, "
+src/ui/main_window.py:324:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:328:                "Gmail",
+src/ui/main_window.py:343:# Gmail Index Window
+src/ui/main_window.py:346:class GmailIndexWindow(QDialog):
+src/ui/main_window.py:350:        self.setWindowTitle("Alcalay - Gmail Index")
+src/ui/main_window.py:362:        title = QLabel("Gmail Parse + Index")
+src/ui/main_window.py:378:        self.start_button = QPushButton("התחל")
+src/ui/main_window.py:379:        self.start_button.clicked.connect(self.start_index)
+src/ui/main_window.py:382:        self.stop_button = QPushButton("עצור")
+src/ui/main_window.py:384:        self.stop_button.clicked.connect(self.stop_process)
+src/ui/main_window.py:387:        self.close_button = QPushButton("סגור")
+src/ui/main_window.py:388:        self.close_button.clicked.connect(self.close)
+src/ui/main_window.py:412:            PROJECT_ROOT / "src" / "gmail" / "gmail_parser.py",
+src/ui/main_window.py:413:            ["--account", DEFAULT_GMAIL_ACCOUNT],
+src/ui/main_window.py:417:        self.process = QProcess(self)
+src/ui/main_window.py:418:        self.process.setProcessChannelMode(QProcess.MergedChannels)
+src/ui/main_window.py:420:        env = QProcessEnvironment.systemEnvironment()
+src/ui/main_window.py:439:        self.process.readyReadStandardOutput.connect(
+src/ui/main_window.py:442:        self.process.finished.connect(
+src/ui/main_window.py:492:                PROJECT_ROOT / "src" / "gmail" / "gmail_indexer.py",
+src/ui/main_window.py:507:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:518:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:522:                "Gmail Index",
+src/ui/main_window.py:537:# Drive Sync Window
+src/ui/main_window.py:540:class DriveSyncWindow(QDialog):
+src/ui/main_window.py:554:        self.setWindowTitle("Alcalay - Google Drive Sync")
+src/ui/main_window.py:564:        title = QLabel("Google Drive Synchronization")
+src/ui/main_window.py:571:            "Google Drive → Local"
+src/ui/main_window.py:572:            if self.direction == DIRECTION_DRIVE_TO_LOCAL
+src/ui/main_window.py:573:            else "Local → Google Drive"
+src/ui/main_window.py:624:        self.start_button = QPushButton("התחל סנכרון")
+src/ui/main_window.py:625:        self.start_button.clicked.connect(self.start_sync)
+src/ui/main_window.py:628:        self.stop_button = QPushButton("עצור")
+src/ui/main_window.py:630:        self.stop_button.clicked.connect(self.stop_sync)
+src/ui/main_window.py:633:        self.reconnect_button = QPushButton("חבר מחדש ל-Google")
+src/ui/main_window.py:634:        self.reconnect_button.clicked.connect(
+src/ui/main_window.py:639:        self.close_button = QPushButton("סגור")
+src/ui/main_window.py:640:        self.close_button.clicked.connect(self.close)
+src/ui/main_window.py:680:        self.process = QProcess(self)
+src/ui/main_window.py:682:            QProcess.MergedChannels
+src/ui/main_window.py:685:        env = QProcessEnvironment.systemEnvironment()
+src/ui/main_window.py:721:        self.process.readyReadStandardOutput.connect(
+src/ui/main_window.py:724:        self.process.finished.connect(
+src/ui/main_window.py:731:            / "drive"
+src/ui/main_window.py:732:            / "drive_sync.py"
+src/ui/main_window.py:738:            f"Starting Drive Sync: {self.direction}"
+src/ui/main_window.py:835:        elif event_type == "DRIVE_CONNECTED":
+src/ui/main_window.py:842:                "Google Drive connected"
+src/ui/main_window.py:1114:        if self.process.state() == QProcess.Running:
+src/ui/main_window.py:1132:            == QProcess.Running
+src/ui/main_window.py:1143:                    DEFAULT_GMAIL_ACCOUNT
+src/ui/main_window.py:1152:                / "drive"
+src/ui/main_window.py:1154:                    DEFAULT_GMAIL_ACCOUNT
+src/ui/main_window.py:1168:            from drive.drive_connection import (
+src/ui/main_window.py:1169:                DriveConnection
+src/ui/main_window.py:1172:            connection = DriveConnection(
+src/ui/main_window.py:1173:                account_email=DEFAULT_GMAIL_ACCOUNT
+src/ui/main_window.py:1176:            connection.connect()
+src/ui/main_window.py:1185:                "Google Drive connection completed."
+src/ui/main_window.py:1190:                "Google Drive",
+src/ui/main_window.py:1191:                "החיבור ל-Google Drive הושלם.",
+src/ui/main_window.py:1196:                f"Google Drive reconnect error: "
+src/ui/main_window.py:1202:                "Google Drive",
+src/ui/main_window.py:1212:            f"Drive Sync finished. "
+src/ui/main_window.py:1239:            and self.process.state() == QProcess.Running
+src/ui/main_window.py:1243:                "Drive Sync",
+src/ui/main_window.py:1259:# Google Drive Window
+src/ui/main_window.py:1262:class GoogleDriveWindow(QDialog):
+src/ui/main_window.py:1266:        self.setWindowTitle("Alcalay - Google Drive")
+src/ui/main_window.py:1278:        title = QLabel("Google Drive")
+src/ui/main_window.py:1287:            "Scan Google Drive",
+src/ui/main_window.py:1292:            "Synchronize Drive → Local",
+src/ui/main_window.py:1293:            "Synchronize Local → Drive",
+src/ui/main_window.py:1323:        self.scan_button = QPushButton("Scan")
+src/ui/main_window.py:1324:        self.scan_button.clicked.connect(
+src/ui/main_window.py:1325:            self.scan_drive
+src/ui/main_window.py:1331:        self.download_button = QPushButton(
+src/ui/main_window.py:1334:        self.download_button.clicked.connect(
+src/ui/main_window.py:1335:            self.download_drive
+src/ui/main_window.py:1341:        self.sync_drive_local_button = QPushButton(
+src/ui/main_window.py:1342:            "Drive → Local"
+src/ui/main_window.py:1344:        self.sync_drive_local_button.clicked.connect(
+src/ui/main_window.py:1346:                DIRECTION_DRIVE_TO_LOCAL
+src/ui/main_window.py:1350:            self.sync_drive_local_button
+src/ui/main_window.py:1353:        self.sync_local_drive_button = QPushButton(
+src/ui/main_window.py:1354:            "Local → Drive"
+src/ui/main_window.py:1356:        self.sync_local_drive_button.clicked.connect(
+src/ui/main_window.py:1358:                DIRECTION_LOCAL_TO_DRIVE
+src/ui/main_window.py:1362:            self.sync_local_drive_button
+src/ui/main_window.py:1365:        self.reconnect_button = QPushButton(
+src/ui/main_window.py:1368:        self.reconnect_button.clicked.connect(
+src/ui/main_window.py:1387:    def scan_drive(self):
+src/ui/main_window.py:1389:            "Google Drive scan requested."
+src/ui/main_window.py:1395:            / "drive"
+src/ui/main_window.py:1396:            / "drive_scanner.py"
+src/ui/main_window.py:1404:    def download_drive(self):
+src/ui/main_window.py:1406:            "Google Drive download requested."
+src/ui/main_window.py:1412:            / "drive"
+src/ui/main_window.py:1413:            / "drive_downloader.py"
+src/ui/main_window.py:1429:            == QProcess.Running
+src/ui/main_window.py:1433:                "Google Drive",
+src/ui/main_window.py:1438:        self.process = QProcess(self)
+src/ui/main_window.py:1440:            QProcess.MergedChannels
+src/ui/main_window.py:1444:            QProcessEnvironment
+src/ui/main_window.py:1482:        self.process.readyReadStandardOutput.connect(
+src/ui/main_window.py:1486:        self.process.finished.connect(
+src/ui/main_window.py:1525:        self.sync_window = DriveSyncWindow(
+src/ui/main_window.py:1536:            from drive.drive_connection import (
+src/ui/main_window.py:1537:                DriveConnection
+src/ui/main_window.py:1540:            connection = DriveConnection(
+src/ui/main_window.py:1541:                account_email=DEFAULT_GMAIL_ACCOUNT
+src/ui/main_window.py:1544:            connection.connect()
+src/ui/main_window.py:1548:                "Google Drive",
+src/ui/main_window.py:1549:                "החיבור ל-Google Drive הושלם.",
+src/ui/main_window.py:1555:                "Google Drive",
+src/ui/main_window.py:1556:                f"שגיאה בחיבור ל-Google Drive:\n{exc}",
+src/ui/main_window.py:1578:        self.drive_button = QPushButton(
+src/ui/main_window.py:1579:            "Google Drive"
+src/ui/main_window.py:1581:        self.drive_button.setMinimumHeight(60)
+src/ui/main_window.py:1582:        self.drive_button.clicked.connect(
+src/ui/main_window.py:1583:            self.open_drive
+src/ui/main_window.py:1586:            self.drive_button
+src/ui/main_window.py:1589:        self.gmail_accounts_button = QPushButton(
+src/ui/main_window.py:1590:            "Gmail Accounts / Labels"
+src/ui/main_window.py:1592:        self.gmail_accounts_button.setMinimumHeight(
+src/ui/main_window.py:1595:        self.gmail_accounts_button.clicked.connect(
+src/ui/main_window.py:1596:            self.open_gmail
+src/ui/main_window.py:1599:            self.gmail_accounts_button
+src/ui/main_window.py:1602:        self.gmail_import_button = QPushButton(
+src/ui/main_window.py:1603:            "Gmail Import"
+src/ui/main_window.py:1605:        self.gmail_import_button.setMinimumHeight(
+src/ui/main_window.py:1608:        self.gmail_import_button.clicked.connect(
+src/ui/main_window.py:1609:            self.open_gmail_import
+src/ui/main_window.py:1612:            self.gmail_import_button
+src/ui/main_window.py:1615:        self.gmail_index_button = QPushButton(
+src/ui/main_window.py:1616:            "Gmail Parse + Index"
+src/ui/main_window.py:1618:        self.gmail_index_button.setMinimumHeight(
+src/ui/main_window.py:1621:        self.gmail_index_button.clicked.connect(
+src/ui/main_window.py:1622:            self.open_gmail_index
+src/ui/main_window.py:1625:            self.gmail_index_button
+src/ui/main_window.py:1628:        self.search_button = QPushButton(
+src/ui/main_window.py:1634:        self.search_button.clicked.connect(
+src/ui/main_window.py:1643:    def open_drive(self):
+src/ui/main_window.py:1644:        window = GoogleDriveWindow(self)
+src/ui/main_window.py:1649:    def open_gmail(self):
+src/ui/main_window.py:1651:            window = GmailWindow(self)
+src/ui/main_window.py:1659:                "Gmail",
+src/ui/main_window.py:1660:                f"שגיאה בפתיחת Gmail:\n{exc}",
+src/ui/main_window.py:1663:    def open_gmail_import(self):
+src/ui/main_window.py:1664:        window = GmailImportWindow(self)
+src/ui/main_window.py:1669:    def open_gmail_index(self):
+src/ui/main_window.py:1670:        window = GmailIndexWindow(self)
+src/ui/main_window.py:1853:        gmail_import_page = GmailImportWindow(
+src/ui/main_window.py:1859:            gmail_import_page,
+src/ui/main_window.py:1862:        self.menu.currentRowChanged.connect(
+src/ui/main_window.py:1932:        QPushButton {
+src/ui/main_window.py:1972:        app.exec()
+src/ui/alcalay_main.py:21:from __future__ import annotations
+src/ui/alcalay_main.py:23:import sys
+src/ui/alcalay_main.py:24:from pathlib import Path
+src/ui/alcalay_main.py:49:from PySide6.QtWidgets import QApplication
+src/ui/alcalay_main.py:56:from ui.main_window import MainWindow
+src/ui/alcalay_main.py:105:    return app.exec()
+src/database/database_manager.py:1:from src.database.connection import DatabaseConnection
+src/database/database_manager.py:9:            database_connection = DatabaseConnection()
+src/database/database_manager.py:19:        connection = self.database_connection.connect()
+src/database/database_manager.py:40:        connection = self.database_connection.connect()
+src/database/database_manager.py:64:        connection = self.database_connection.connect()
+src/database/connection.py:1:import json
+src/database/connection.py:2:import os
+src/database/connection.py:3:from pathlib import Path
+src/database/connection.py:5:import psycopg
+src/database/connection.py:12:class DatabaseConnection:
+src/database/connection.py:60:        return psycopg.connect(
+src/database/connection.py:71:            connection = self.connect()
+src/database/connection.py:87:        except psycopg.Error:
+src/database/source_manager.py:1:from __future__ import annotations
+src/database/source_manager.py:3:from typing import Any, Optional
+src/database/source_manager.py:5:from src.database.database_manager import DatabaseManager
+src/database/source_manager.py:216:            .connect()
+src/database/source_manager.py:474:            .connect()
+src/database/source_manager.py:748:            .connect()
+src/search/search_result_window.py:10:    Gmail / PostgreSQL
+src/search/search_result_window.py:20:from __future__ import annotations
+src/search/search_result_window.py:22:import html
+src/search/search_result_window.py:23:import json
+src/search/search_result_window.py:24:import sys
+src/search/search_result_window.py:25:from datetime import datetime
+src/search/search_result_window.py:26:from pathlib import Path
+src/search/search_result_window.py:27:from typing import Any, Dict, Optional
+src/search/search_result_window.py:29:from PySide6.QtCore import Qt
+src/search/search_result_window.py:30:from PySide6.QtGui import QTextCursor, QTextDocument
+src/search/search_result_window.py:31:from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+src/search/search_result_window.py:32:from PySide6.QtWidgets import (
+src/search/search_result_window.py:40:    QPushButton,
+src/search/search_result_window.py:55:    It does not connect to Gmail and does not perform database queries.
+src/search/search_result_window.py:108:            "Gmail / PostgreSQL"
+src/search/search_result_window.py:140:        self.search_edit.returnPressed.connect(
+src/search/search_result_window.py:144:        self.find_previous_button = QPushButton(
+src/search/search_result_window.py:147:        self.find_previous_button.clicked.connect(
+src/search/search_result_window.py:151:        self.find_next_button = QPushButton(
+src/search/search_result_window.py:154:        self.find_next_button.clicked.connect(
+src/search/search_result_window.py:158:        self.clear_find_button = QPushButton(
+src/search/search_result_window.py:161:        self.clear_find_button.clicked.connect(
+src/search/search_result_window.py:227:        self.save_pdf_button = QPushButton(
+src/search/search_result_window.py:233:        self.save_pdf_button.clicked.connect(
+src/search/search_result_window.py:237:        self.print_button = QPushButton(
+src/search/search_result_window.py:243:        self.print_button.clicked.connect(
+src/search/search_result_window.py:247:        self.close_button = QPushButton(
+src/search/search_result_window.py:253:        self.close_button.clicked.connect(
+src/search/search_result_window.py:307:                "gmail_message_key"
+src/search/search_result_window.py:783:            if dialog.exec() != QPrintDialog.Accepted:
+src/search/search_result_window.py:1007:        "gmail_message_key": "test-message",
+src/search/search_result_window.py:1025:        app.exec()
+src/search/search_window.py:10:    - Gmail data already downloaded, parsed and indexed in PostgreSQL.
+src/search/search_window.py:14:    - This window does NOT connect to Gmail.
+src/search/search_window.py:15:    - It does NOT call the Gmail API.
+src/search/search_window.py:19:Current Gmail search sources:
+src/search/search_window.py:21:    public.gmail_search_index
+src/search/search_window.py:22:    public.gmail_attachment_search_index
+src/search/search_window.py:25:from __future__ import annotations
+src/search/search_window.py:27:import json
+src/search/search_window.py:28:import sys
+src/search/search_window.py:30:from datetime import datetime, timedelta
+src/search/search_window.py:31:from pathlib import Path
+src/search/search_window.py:32:from typing import Any, Dict, List, Optional
+src/search/search_window.py:34:from PySide6.QtCore import Qt
+src/search/search_window.py:35:from PySide6.QtWidgets import (
+src/search/search_window.py:47:    QPushButton,
+src/search/search_window.py:62:from database.connection import DatabaseConnection
+src/search/search_window.py:63:from search.search_result_window import SearchResultWindow
+src/search/search_window.py:72:        Gmail / PostgreSQL
+src/search/search_window.py:77:    No Gmail API access is performed here.
+src/search/search_window.py:83:        self.db: Optional[DatabaseConnection] = None
+src/search/search_window.py:144:        self.search_button = QPushButton("חיפוש")
+src/search/search_window.py:147:        self.search_button.clicked.connect(self._perform_search)
+src/search/search_window.py:149:        self.clear_button = QPushButton("ניקוי")
+src/search/search_window.py:152:        self.clear_button.clicked.connect(self._clear_search)
+src/search/search_window.py:199:        self.source_mode_combo.currentIndexChanged.connect(
+src/search/search_window.py:211:        self.gmail_checkbox = QCheckBox(
+src/search/search_window.py:212:            "Gmail / PostgreSQL"
+src/search/search_window.py:214:        self.gmail_checkbox.setChecked(True)
+src/search/search_window.py:222:        self.google_drive_checkbox = QCheckBox(
+src/search/search_window.py:223:            "Google Drive"
+src/search/search_window.py:225:        self.google_drive_checkbox.setChecked(False)
+src/search/search_window.py:226:        self.google_drive_checkbox.setEnabled(False)
+src/search/search_window.py:234:        repositories_layout.addWidget(self.gmail_checkbox)
+src/search/search_window.py:236:        repositories_layout.addWidget(self.google_drive_checkbox)
+src/search/search_window.py:275:        self.text_edit.returnPressed.connect(
+src/search/search_window.py:392:        self.from_enabled.toggled.connect(
+src/search/search_window.py:396:        self.to_enabled.toggled.connect(
+src/search/search_window.py:481:        self.results_table.cellDoubleClicked.connect(
+src/search/search_window.py:500:            self.db = DatabaseConnection()
+src/search/search_window.py:501:            self.connection = self.db.connect()
+src/search/search_window.py:553:        self.gmail_checkbox.setEnabled(
+src/search/search_window.py:558:            self.gmail_checkbox.setChecked(True)
+src/search/search_window.py:560:            self.google_drive_checkbox.setChecked(False)
+src/search/search_window.py:567:            return ["gmail"]
+src/search/search_window.py:571:        if self.gmail_checkbox.isChecked():
+src/search/search_window.py:572:            sources.append("gmail")
+src/search/search_window.py:577:        if self.google_drive_checkbox.isChecked():
+src/search/search_window.py:578:            sources.append("google_drive")
+src/search/search_window.py:603:            if source != "gmail"
+src/search/search_window.py:610:                "כרגע מנגנון החיפוש הפעיל הוא Gmail / PostgreSQL.\n\n"
+src/search/search_window.py:615:        if "gmail" not in sources:
+src/search/search_window.py:633:                    "מחפש בנתוני Gmail המקומיים..."
+src/search/search_window.py:638:            email_query, email_params = self._build_gmail_query()
+src/search/search_window.py:640:            email_rows = self._execute_gmail_search(
+src/search/search_window.py:652:                attachment_rows = self._execute_gmail_search(
+src/search/search_window.py:796:    def _build_gmail_query(self):
+src/search/search_window.py:830:                g.gmail_message_id,
+src/search/search_window.py:831:                g.gmail_message_key,
+src/search/search_window.py:832:                g.gmail_account_id,
+src/search/search_window.py:855:                NULL::bigint AS gmail_attachment_id,
+src/search/search_window.py:861:            FROM gmail_search_index AS g
+src/search/search_window.py:909:                g.gmail_message_id,
+src/search/search_window.py:910:                g.gmail_message_key,
+src/search/search_window.py:911:                g.gmail_account_id,
+src/search/search_window.py:936:                a.gmail_attachment_id,
+src/search/search_window.py:943:            FROM gmail_attachment_search_index AS a
+src/search/search_window.py:944:            INNER JOIN gmail_search_index AS g
+src/search/search_window.py:945:                ON g.gmail_message_id = a.gmail_message_id
+src/search/search_window.py:992:    def _execute_gmail_search(
+src/search/search_window.py:1058:                source_text = "Gmail / צרופה"
+src/search/search_window.py:1060:                source_text = "Gmail"
+src/search/search_window.py:1117:                        "gmail_message_key"
+src/search/search_window.py:1125:                        "gmail_account_id"
+src/search/search_window.py:1245:                "מקור: Gmail / צרופה"
+src/search/search_window.py:1264:                "מקור: Gmail / PostgreSQL"
+src/search/search_window.py:1289:            f"{self._safe_text(result.get('gmail_message_key'))}"
+src/search/search_window.py:1598:        app.exec()
+src/documents/document_service.py:1:import hashlib
+src/documents/document_service.py:2:import mimetypes
+src/documents/document_service.py:3:from datetime import datetime
+src/documents/document_service.py:4:from pathlib import Path
+src/documents/document_service.py:6:from src.database.database_manager import DatabaseManager
+src/documents/document_service.py:443:        connection = self.db.database_connection.connect()
+src/documents/__init__.py:1:from src.documents.document_service import DocumentService
+src/drive/test_drive_connection.py:4:Alcalay - Google Drive Connection Test
+src/drive/test_drive_connection.py:7:Read-only verification of the Alcalay Google Drive repository.
+src/drive/test_drive_connection.py:10:    - Connects to Google Drive.
+src/drive/test_drive_connection.py:24:from __future__ import annotations
+src/drive/test_drive_connection.py:26:import sys
+src/drive/test_drive_connection.py:27:from pathlib import Path
+src/drive/test_drive_connection.py:37:from src.drive.drive_connection import DriveConnection
+src/drive/test_drive_connection.py:44:    print("ALCALAY - GOOGLE DRIVE CONNECTION TEST")
+src/drive/test_drive_connection.py:50:        connection = DriveConnection()
+src/drive/test_drive_connection.py:52:        print("[1/2] Connecting to Google Drive...")
+src/drive/test_drive_connection.py:55:        email = connection.connect()
+src/drive/test_drive_connection.py:104:            print("RESULT: Google Drive connection is OK.")
+src/drive/drive_sync_check.py:4:Alcalay - Google Drive Sync Pre-Check
+src/drive/drive_sync_check.py:8:This program checks the local storage against PostgreSQL and Google Drive
+src/drive/drive_sync_check.py:9:before the actual LOCAL_TO_DRIVE synchronization.
+src/drive/drive_sync_check.py:14:- Does NOT create Drive folders.
+src/drive/drive_sync_check.py:17:- Uses DriveConnection.service for the Google Drive API.
+src/drive/drive_sync_check.py:18:  DriveConnection.connect() returns the account email string.
+src/drive/drive_sync_check.py:20:Current local -> Drive structure:
+src/drive/drive_sync_check.py:24:        ... non-Gmail storage files ...
+src/drive/drive_sync_check.py:26:    gmail/
+src/drive/drive_sync_check.py:27:        frank.avner@gmail.com/
+src/drive/drive_sync_check.py:35:3. Expected Google Drive hierarchy.
+src/drive/drive_sync_check.py:36:4. Existing Drive files.
+src/drive/drive_sync_check.py:42:storage/drive_sync_check/
+src/drive/drive_sync_check.py:45:from __future__ import annotations
+src/drive/drive_sync_check.py:47:import hashlib
+src/drive/drive_sync_check.py:48:import json
+src/drive/drive_sync_check.py:49:import sys
+src/drive/drive_sync_check.py:50:import traceback
+src/drive/drive_sync_check.py:51:from datetime import datetime, timezone
+src/drive/drive_sync_check.py:52:from pathlib import Path
+src/drive/drive_sync_check.py:53:from typing import Any, Optional
+src/drive/drive_sync_check.py:70:from src.database.connection import DatabaseConnection
+src/drive/drive_sync_check.py:71:from src.database.database_manager import DatabaseManager
+src/drive/drive_sync_check.py:72:from src.drive.drive_connection import DriveConnection
+src/drive/drive_sync_check.py:83:    / "drive_sync_check"
+src/drive/drive_sync_check.py:88:DRIVE_ROOT_NAME = "Alcalay"
+src/drive/drive_sync_check.py:90:DOCUMENTS_DRIVE_FOLDER = "Documents"
+src/drive/drive_sync_check.py:92:GMAIL_ACCOUNT = "frank.avner@gmail.com"
+src/drive/drive_sync_check.py:94:GMAIL_LOCAL_ROOT = (
+src/drive/drive_sync_check.py:95:    Path("gmail")
+src/drive/drive_sync_check.py:96:    / GMAIL_ACCOUNT
+src/drive/drive_sync_check.py:221:    if first == "gmail":
+src/drive/drive_sync_check.py:222:        return "GMAIL"
+src/drive/drive_sync_check.py:233:    if first == "drive":
+src/drive/drive_sync_check.py:234:        return "DRIVE"
+src/drive/drive_sync_check.py:243:class DriveSyncChecker:
+src/drive/drive_sync_check.py:245:    Read-only local storage -> Google Drive pre-check.
+src/drive/drive_sync_check.py:250:        self.db_connection = DatabaseConnection()
+src/drive/drive_sync_check.py:254:        self.drive_connection = DriveConnection()
+src/drive/drive_sync_check.py:256:        # DriveConnection.connect() returns account email.
+src/drive/drive_sync_check.py:257:        self.drive_account: Optional[str] = None
+src/drive/drive_sync_check.py:259:        # Actual Google Drive API service.
+src/drive/drive_sync_check.py:260:        self.drive_service = None
+src/drive/drive_sync_check.py:264:        self.drive_root_id: Optional[str] = None
+src/drive/drive_sync_check.py:272:            "gmail_files": 0,
+src/drive/drive_sync_check.py:273:            "non_gmail_files": 0,
+src/drive/drive_sync_check.py:276:            "already_in_drive": 0,
+src/drive/drive_sync_check.py:277:            "not_in_drive": 0,
+src/drive/drive_sync_check.py:288:    # GOOGLE DRIVE CONNECTION
+src/drive/drive_sync_check.py:291:    def connect_drive(self) -> None:
+src/drive/drive_sync_check.py:293:        Connect to Google Drive.
+src/drive/drive_sync_check.py:295:        DriveConnection.connect() returns the account email.
+src/drive/drive_sync_check.py:297:        The actual Google Drive API service is stored in:
+src/drive/drive_sync_check.py:298:            DriveConnection.service
+src/drive/drive_sync_check.py:302:            "[Google Drive] Connecting..."
+src/drive/drive_sync_check.py:305:        self.drive_account = (
+src/drive/drive_sync_check.py:306:            self.drive_connection.connect()
+src/drive/drive_sync_check.py:309:        if not self.drive_account:
+src/drive/drive_sync_check.py:311:                "Google Drive connection returned "
+src/drive/drive_sync_check.py:315:        self.drive_service = getattr(
+src/drive/drive_sync_check.py:316:            self.drive_connection,
+src/drive/drive_sync_check.py:321:        if self.drive_service is None:
+src/drive/drive_sync_check.py:323:                "DriveConnection.connect() succeeded, "
+src/drive/drive_sync_check.py:324:                "but DriveConnection.service is not available."
+src/drive/drive_sync_check.py:328:            self.drive_service,
+src/drive/drive_sync_check.py:335:                "DriveConnection.service does not expose files()."
+src/drive/drive_sync_check.py:339:            "OK: Google Drive connection"
+src/drive/drive_sync_check.py:343:            f"Drive account: "
+src/drive/drive_sync_check.py:344:            f"{self.drive_account}"
+src/drive/drive_sync_check.py:354:        Load Alcalay Drive repository information.
+src/drive/drive_sync_check.py:358:        drive_repositories
+src/drive/drive_sync_check.py:377:            FROM drive_repositories
+src/drive/drive_sync_check.py:389:                f"Drive repository "
+src/drive/drive_sync_check.py:392:                f"drive_repositories."
+src/drive/drive_sync_check.py:399:        self.drive_root_id = row.get(
+src/drive/drive_sync_check.py:403:        if not self.drive_root_id:
+src/drive/drive_sync_check.py:406:                f"Drive repository "
+src/drive/drive_sync_check.py:414:                f"Drive repository "
+src/drive/drive_sync_check.py:429:            f"Drive root folder ID: "
+src/drive/drive_sync_check.py:430:            f"{self.drive_root_id}"
+src/drive/drive_sync_check.py:498:        gmail_count = 0
+src/drive/drive_sync_check.py:508:                == "GMAIL"
+src/drive/drive_sync_check.py:510:                gmail_count += 1
+src/drive/drive_sync_check.py:513:            "gmail_files"
+src/drive/drive_sync_check.py:514:        ] = gmail_count
+src/drive/drive_sync_check.py:517:            "non_gmail_files"
+src/drive/drive_sync_check.py:520:            - gmail_count
+src/drive/drive_sync_check.py:530:            f"Gmail files: "
+src/drive/drive_sync_check.py:531:            f"{gmail_count:,}"
+src/drive/drive_sync_check.py:536:            f"{len(files) - gmail_count:,}"
+src/drive/drive_sync_check.py:553:        Find an existing local -> Drive mapping.
+src/drive/drive_sync_check.py:555:        First checks drive_local_files.
+src/drive/drive_sync_check.py:557:        Then checks drive_files.
+src/drive/drive_sync_check.py:567:                FROM drive_local_files
+src/drive/drive_sync_check.py:587:                FROM drive_files
+src/drive/drive_sync_check.py:606:    # EXPECTED DRIVE PATH
+src/drive/drive_sync_check.py:609:    def expected_drive_segments(
+src/drive/drive_sync_check.py:614:        Return expected Drive folders.
+src/drive/drive_sync_check.py:616:        Gmail example:
+src/drive/drive_sync_check.py:618:        storage/gmail/frank.avner@gmail.com/messages/a.eml
+src/drive/drive_sync_check.py:623:            gmail/
+src/drive/drive_sync_check.py:624:                frank.avner@gmail.com/
+src/drive/drive_sync_check.py:628:        Non-Gmail example:
+src/drive/drive_sync_check.py:652:        if source_type == "GMAIL":
+src/drive/drive_sync_check.py:654:            # gmail /
+src/drive/drive_sync_check.py:655:            # frank.avner@gmail.com /
+src/drive/drive_sync_check.py:663:            DOCUMENTS_DRIVE_FOLDER
+src/drive/drive_sync_check.py:668:    # FIND DRIVE FOLDER
+src/drive/drive_sync_check.py:671:    def find_drive_folder(
+src/drive/drive_sync_check.py:683:        if self.drive_service is None:
+src/drive/drive_sync_check.py:686:                "Google Drive service "
+src/drive/drive_sync_check.py:701:            self.drive_service
+src/drive/drive_sync_check.py:705:                spaces="drive",
+src/drive/drive_sync_check.py:715:                includeItemsFromAllDrives=True,
+src/drive/drive_sync_check.py:716:                supportsAllDrives=True,
+src/drive/drive_sync_check.py:733:    # RESOLVE DRIVE PARENT
+src/drive/drive_sync_check.py:736:    def resolve_existing_drive_parent(
+src/drive/drive_sync_check.py:745:        Walk the Drive hierarchy without
+src/drive/drive_sync_check.py:758:        if not self.drive_root_id:
+src/drive/drive_sync_check.py:761:                "Drive root folder ID "
+src/drive/drive_sync_check.py:766:            self.drive_root_id
+src/drive/drive_sync_check.py:774:                self.find_drive_folder(
+src/drive/drive_sync_check.py:804:    # FIND DRIVE FILE
+src/drive/drive_sync_check.py:807:    def find_drive_file(
+src/drive/drive_sync_check.py:816:        a Drive folder.
+src/drive/drive_sync_check.py:819:        if self.drive_service is None:
+src/drive/drive_sync_check.py:822:                "Google Drive service "
+src/drive/drive_sync_check.py:837:            self.drive_service
+src/drive/drive_sync_check.py:841:                spaces="drive",
+src/drive/drive_sync_check.py:855:                includeItemsFromAllDrives=True,
+src/drive/drive_sync_check.py:856:                supportsAllDrives=True,
+src/drive/drive_sync_check.py:873:    # DRIVE PATH CHECK
+src/drive/drive_sync_check.py:876:    def check_drive_path(
+src/drive/drive_sync_check.py:881:        Check whether the expected Drive
+src/drive/drive_sync_check.py:901:            self.expected_drive_segments(
+src/drive/drive_sync_check.py:911:            self.resolve_existing_drive_parent(
+src/drive/drive_sync_check.py:918:            "drive_root_id":
+src/drive/drive_sync_check.py:919:                self.drive_root_id,
+src/drive/drive_sync_check.py:930:            "drive_parent_id":
+src/drive/drive_sync_check.py:933:            "drive_file":
+src/drive/drive_sync_check.py:951:        drive_file = (
+src/drive/drive_sync_check.py:952:            self.find_drive_file(
+src/drive/drive_sync_check.py:959:            "drive_file"
+src/drive/drive_sync_check.py:960:        ] = drive_file
+src/drive/drive_sync_check.py:965:            drive_file is not None
+src/drive/drive_sync_check.py:982:        drive_info: dict[str, Any],
+src/drive/drive_sync_check.py:1001:        drive_file = (
+src/drive/drive_sync_check.py:1002:            drive_info.get(
+src/drive/drive_sync_check.py:1003:                "drive_file"
+src/drive/drive_sync_check.py:1008:            drive_info.get(
+src/drive/drive_sync_check.py:1048:            "drive_folder_tree_exists":
+src/drive/drive_sync_check.py:1051:            "drive_file_id":
+src/drive/drive_sync_check.py:1054:            "drive_file_name":
+src/drive/drive_sync_check.py:1057:            "drive_file_modified_time":
+src/drive/drive_sync_check.py:1060:            "drive_md5":
+src/drive/drive_sync_check.py:1063:            "missing_drive_folders":
+src/drive/drive_sync_check.py:1064:                drive_info.get(
+src/drive/drive_sync_check.py:1070:        if drive_file:
+src/drive/drive_sync_check.py:1073:                "drive_file_id"
+src/drive/drive_sync_check.py:1074:            ] = drive_file.get(
+src/drive/drive_sync_check.py:1079:                "drive_file_name"
+src/drive/drive_sync_check.py:1080:            ] = drive_file.get(
+src/drive/drive_sync_check.py:1085:                "drive_file_modified_time"
+src/drive/drive_sync_check.py:1086:            ] = drive_file.get(
+src/drive/drive_sync_check.py:1091:                "drive_md5"
+src/drive/drive_sync_check.py:1092:            ] = drive_file.get(
+src/drive/drive_sync_check.py:1097:        # PostgreSQL + Drive
+src/drive/drive_sync_check.py:1102:            and drive_file
+src/drive/drive_sync_check.py:1118:                "already_in_drive"
+src/drive/drive_sync_check.py:1124:        # PostgreSQL but not Drive
+src/drive/drive_sync_check.py:1129:            and not drive_file
+src/drive/drive_sync_check.py:1141:                "not_in_drive"
+src/drive/drive_sync_check.py:1151:        # Drive but not PostgreSQL
+src/drive/drive_sync_check.py:1156:            and drive_file
+src/drive/drive_sync_check.py:1168:                "already_in_drive"
+src/drive/drive_sync_check.py:1178:        # Neither PostgreSQL nor Drive
+src/drive/drive_sync_check.py:1190:            "not_in_drive"
+src/drive/drive_sync_check.py:1234:            drive_info = (
+src/drive/drive_sync_check.py:1235:                self.check_drive_path(
+src/drive/drive_sync_check.py:1245:                    drive_info=drive_info,
+src/drive/drive_sync_check.py:1292:            "ALCALAY DRIVE SYNC PRE-CHECK"
+src/drive/drive_sync_check.py:1311:        # Google Drive.
+src/drive/drive_sync_check.py:1312:        self.connect_drive()
+src/drive/drive_sync_check.py:1393:                    self.drive_root_id,
+src/drive/drive_sync_check.py:1395:                "drive_account":
+src/drive/drive_sync_check.py:1396:                    self.drive_account,
+src/drive/drive_sync_check.py:1507:                "ALCALAY DRIVE SYNC PRE-CHECK\n"
+src/drive/drive_sync_check.py:1531:                f"Drive account: "
+src/drive/drive_sync_check.py:1532:                f"{report['repository'].get('drive_account')}\n"
+src/drive/drive_sync_check.py:1536:                f"Drive root: "
+src/drive/drive_sync_check.py:1555:                "gmail_files",
+src/drive/drive_sync_check.py:1556:                "non_gmail_files",
+src/drive/drive_sync_check.py:1559:                "already_in_drive",
+src/drive/drive_sync_check.py:1560:                "not_in_drive",
+src/drive/drive_sync_check.py:1691:            f"Gmail files           : "
+src/drive/drive_sync_check.py:1692:            f"{self.summary['gmail_files']:,}"
+src/drive/drive_sync_check.py:1697:            f"{self.summary['non_gmail_files']:,}"
+src/drive/drive_sync_check.py:1711:            f"Already in Drive      : "
+src/drive/drive_sync_check.py:1712:            f"{self.summary['already_in_drive']:,}"
+src/drive/drive_sync_check.py:1716:            f"Not in Drive          : "
+src/drive/drive_sync_check.py:1717:            f"{self.summary['not_in_drive']:,}"
+src/drive/drive_sync_check.py:1751:        # Gmail path validation
+src/drive/drive_sync_check.py:1754:        gmail_results = [
+src/drive/drive_sync_check.py:1759:            ) == "GMAIL"
+src/drive/drive_sync_check.py:1762:        gmail_path_errors = 0
+src/drive/drive_sync_check.py:1764:        for result in gmail_results:
+src/drive/drive_sync_check.py:1770:                gmail_path_errors += 1
+src/drive/drive_sync_check.py:1773:            f"Gmail path checks     : "
+src/drive/drive_sync_check.py:1774:            f"{len(gmail_results):,}"
+src/drive/drive_sync_check.py:1778:            f"Gmail path errors     : "
+src/drive/drive_sync_check.py:1779:            f"{gmail_path_errors:,}"
+src/drive/drive_sync_check.py:1794:        DriveSyncChecker()
+src/drive/drive_content_filter.py:4:Alcalay - Google Drive Content Keyword Filter
+src/drive/drive_content_filter.py:7:Searches the indexed content of Google Drive files for the
+src/drive/drive_content_filter.py:12:    PostgreSQL drive_files
+src/drive/drive_content_filter.py:21:    Google Drive fullText search
+src/drive/drive_content_filter.py:24:    Match Google Drive file IDs against PostgreSQL
+src/drive/drive_content_filter.py:27:    drive_file_keyword_matches
+src/drive/drive_content_filter.py:30:    drive_files.is_relevant = TRUE
+src/drive/drive_content_filter.py:35:    - No Google Drive export.
+src/drive/drive_content_filter.py:36:    - No Google Drive write.
+src/drive/drive_content_filter.py:42:    src/drive/drive_keyword_filter.py
+src/drive/drive_content_filter.py:45:from __future__ import annotations
+src/drive/drive_content_filter.py:47:import sys
+src/drive/drive_content_filter.py:48:from dataclasses import dataclass
+src/drive/drive_content_filter.py:49:from pathlib import Path
+src/drive/drive_content_filter.py:50:from typing import Any
+src/drive/drive_content_filter.py:69:    from src.database.connection import DatabaseConnection
+src/drive/drive_content_filter.py:71:    database = DatabaseConnection()
+src/drive/drive_content_filter.py:73:    return database.connect()
+src/drive/drive_content_filter.py:93:class DriveFileRecord:
+src/drive/drive_content_filter.py:95:    drive_file_id: str
+src/drive/drive_content_filter.py:105:class DriveContentKeywordFilter:
+src/drive/drive_content_filter.py:129:                "Google Drive עדיין לא מחובר."
+src/drive/drive_content_filter.py:141:            FROM drive_repositories
+src/drive/drive_content_filter.py:152:                f"'{self.REPOSITORY_KEY}' ב-drive_repositories."
+src/drive/drive_content_filter.py:165:            FROM drive_keyword_rule_sets
+src/drive/drive_content_filter.py:198:            FROM drive_keyword_rules
+src/drive/drive_content_filter.py:229:    ) -> list[DriveFileRecord]:
+src/drive/drive_content_filter.py:235:                drive_file_id,
+src/drive/drive_content_filter.py:239:            FROM drive_files
+src/drive/drive_content_filter.py:248:        files: list[DriveFileRecord] = []
+src/drive/drive_content_filter.py:253:                DriveFileRecord(
+src/drive/drive_content_filter.py:255:                    drive_file_id=str(row[1]),
+src/drive/drive_content_filter.py:269:    # GOOGLE DRIVE QUERY
+src/drive/drive_content_filter.py:273:    def _escape_drive_query_value(
+src/drive/drive_content_filter.py:302:        escaped = cls._escape_drive_query_value(
+src/drive/drive_content_filter.py:320:    def _search_google_drive(
+src/drive/drive_content_filter.py:338:            # Google Drive returns:
+src/drive/drive_content_filter.py:346:                    spaces="drive",
+src/drive/drive_content_filter.py:350:                    supportsAllDrives=True,
+src/drive/drive_content_filter.py:351:                    includeItemsFromAllDrives=True,
+src/drive/drive_content_filter.py:403:        drive_file: DriveFileRecord,
+src/drive/drive_content_filter.py:409:            INSERT INTO drive_file_keyword_matches
+src/drive/drive_content_filter.py:411:                drive_file_id_fk,
+src/drive/drive_content_filter.py:425:                drive_file_id_fk,
+src/drive/drive_content_filter.py:435:                drive_file.id,
+src/drive/drive_content_filter.py:449:        drive_file: DriveFileRecord,
+src/drive/drive_content_filter.py:455:            UPDATE drive_files
+src/drive/drive_content_filter.py:465:                drive_file.id,
+src/drive/drive_content_filter.py:472:        drive_file: DriveFileRecord,
+src/drive/drive_content_filter.py:477:            UPDATE drive_files
+src/drive/drive_content_filter.py:490:                drive_file.id,
+src/drive/drive_content_filter.py:553:                candidate_by_drive_id = {
+src/drive/drive_content_filter.py:554:                    item.drive_file_id: item
+src/drive/drive_content_filter.py:558:                candidate_drive_ids = set(
+src/drive/drive_content_filter.py:559:                    candidate_by_drive_id.keys()
+src/drive/drive_content_filter.py:577:                            self._search_google_drive(
+src/drive/drive_content_filter.py:588:                            & candidate_drive_ids
+src/drive/drive_content_filter.py:602:                        for drive_id in relevant_ids:
+src/drive/drive_content_filter.py:604:                            drive_file = (
+src/drive/drive_content_filter.py:605:                                candidate_by_drive_id[
+src/drive/drive_content_filter.py:606:                                    drive_id
+src/drive/drive_content_filter.py:612:                                drive_file,
+src/drive/drive_content_filter.py:618:                                drive_file,
+src/drive/drive_content_filter.py:652:                relevant_drive_ids: set[str] = set()
+src/drive/drive_content_filter.py:663:                    relevant_drive_ids.update(
+src/drive/drive_content_filter.py:665:                        & candidate_drive_ids
+src/drive/drive_content_filter.py:668:                for drive_file in candidates:
+src/drive/drive_content_filter.py:671:                        drive_file.drive_file_id
+src/drive/drive_content_filter.py:672:                        in relevant_drive_ids
+src/drive/drive_content_filter.py:678:                        drive_file,
+src/drive/drive_content_filter.py:690:                    relevant_drive_ids
+src/drive/drive_content_filter.py:717:            "GOOGLE DRIVE CONTENT KEYWORD FILTER COMPLETED"
+src/drive/drive_content_filter.py:771:            "[DRIVE WRITE]      NO"
+src/drive/drive_content_filter.py:805:        "STARTING GOOGLE DRIVE CONTENT KEYWORD FILTER"
+src/drive/drive_content_filter.py:811:        from src.drive.drive_connection import (
+src/drive/drive_content_filter.py:812:            DriveConnection,
+src/drive/drive_content_filter.py:815:        connection = DriveConnection(
+src/drive/drive_content_filter.py:816:            "frank.avner@gmail.com"
+src/drive/drive_content_filter.py:819:        email = connection.connect()
+src/drive/drive_content_filter.py:826:            "[SEARCH]         Google Drive fullText"
+src/drive/drive_content_filter.py:834:            "[DRIVE WRITE]    NO"
+src/drive/drive_content_filter.py:840:            DriveContentKeywordFilter(
+src/drive/drive_content_filter.py:863:            "GOOGLE DRIVE CONTENT KEYWORD FILTER FAILED"
+src/drive/drive_duplicate_checker.py:4:Alcalay - Google Drive Duplicate / Version Checker
+src/drive/drive_duplicate_checker.py:14:    - modify Google Drive
+src/drive/drive_duplicate_checker.py:21:    drive_files
+src/drive/drive_duplicate_checker.py:39:md5Checksum in Drive metadata.
+src/drive/drive_duplicate_checker.py:49:from __future__ import annotations
+src/drive/drive_duplicate_checker.py:51:import sys
+src/drive/drive_duplicate_checker.py:52:from dataclasses import dataclass
+src/drive/drive_duplicate_checker.py:53:from datetime import datetime
+src/drive/drive_duplicate_checker.py:54:from pathlib import Path
+src/drive/drive_duplicate_checker.py:55:from typing import Any
+src/drive/drive_duplicate_checker.py:72:from src.database.connection import DatabaseConnection
+src/drive/drive_duplicate_checker.py:93:    drive_file_db_id: int
+src/drive/drive_duplicate_checker.py:94:    drive_file_id: str
+src/drive/drive_duplicate_checker.py:106:    canonical_drive_file_db_id: int | None = None
+src/drive/drive_duplicate_checker.py:161:class DriveDuplicateChecker:
+src/drive/drive_duplicate_checker.py:165:    Uses the existing Alcalay DatabaseConnection class and its
+src/drive/drive_duplicate_checker.py:166:    psycopg connection.
+src/drive/drive_duplicate_checker.py:168:    No Google Drive download/export is performed.
+src/drive/drive_duplicate_checker.py:173:        self.db = DatabaseConnection()
+src/drive/drive_duplicate_checker.py:187:        print("STARTING GOOGLE DRIVE DUPLICATE / VERSION CHECK")
+src/drive/drive_duplicate_checker.py:192:        print("[DRIVE WRITE] NO")
+src/drive/drive_duplicate_checker.py:212:            self.connection = self.db.connect()
+src/drive/drive_duplicate_checker.py:291:                    f"[DRIVE FILE ID] "
+src/drive/drive_duplicate_checker.py:292:                    f"{file_row['drive_file_id']}"
+src/drive/drive_duplicate_checker.py:420:        Get repository ID using drive_repositories.repository_key.
+src/drive/drive_duplicate_checker.py:427:            FROM drive_repositories
+src/drive/drive_duplicate_checker.py:459:                drive_file_id,
+src/drive/drive_duplicate_checker.py:460:                parent_drive_file_id,
+src/drive/drive_duplicate_checker.py:475:            FROM drive_files
+src/drive/drive_duplicate_checker.py:484:            "drive_file_id",
+src/drive/drive_duplicate_checker.py:485:            "parent_drive_file_id",
+src/drive/drive_duplicate_checker.py:530:        drive_file_db_id = int(
+src/drive/drive_duplicate_checker.py:534:        drive_file_id = str(
+src/drive/drive_duplicate_checker.py:535:            file_row["drive_file_id"]
+src/drive/drive_duplicate_checker.py:578:            drive_file_db_id
+src/drive/drive_duplicate_checker.py:592:            drive_file_db_id
+src/drive/drive_duplicate_checker.py:598:                "drive_file_version_id"
+src/drive/drive_duplicate_checker.py:617:                            drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:618:                            drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:633:                                "Drive version."
+src/drive/drive_duplicate_checker.py:655:                    drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:656:                    drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:669:                        "drive_files reports the file "
+src/drive/drive_duplicate_checker.py:671:                        "Drive metadata matches the "
+src/drive/drive_duplicate_checker.py:683:                drive_file_db_id,
+src/drive/drive_duplicate_checker.py:698:                            "canonical_drive_file_id"
+src/drive/drive_duplicate_checker.py:702:                        "canonical_drive_file_id"
+src/drive/drive_duplicate_checker.py:709:                    drive_file_db_id,
+src/drive/drive_duplicate_checker.py:710:                    canonical_id == drive_file_db_id,
+src/drive/drive_duplicate_checker.py:714:                    drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:715:                    drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:720:                    canonical_drive_file_db_id=canonical_id,
+src/drive/drive_duplicate_checker.py:722:                        "Another registered Drive file "
+src/drive/drive_duplicate_checker.py:741:                    drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:742:                    drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:755:                        "Current Drive metadata matches "
+src/drive/drive_duplicate_checker.py:774:                drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:782:                drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:783:                drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:797:                    "Drive metadata changed compared "
+src/drive/drive_duplicate_checker.py:809:            drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:817:            drive_file_db_id=drive_file_db_id,
+src/drive/drive_duplicate_checker.py:818:            drive_file_id=drive_file_id,
+src/drive/drive_duplicate_checker.py:835:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:841:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:843:                drive_modified_time,
+src/drive/drive_duplicate_checker.py:853:            FROM drive_file_versions
+src/drive/drive_duplicate_checker.py:854:            WHERE drive_file_id_fk = %s
+src/drive/drive_duplicate_checker.py:860:            "drive_file_id_fk",
+src/drive/drive_duplicate_checker.py:862:            "drive_modified_time",
+src/drive/drive_duplicate_checker.py:878:                (drive_file_db_id,),
+src/drive/drive_duplicate_checker.py:905:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:907:                drive_modified_time,
+src/drive/drive_duplicate_checker.py:917:            FROM drive_file_versions
+src/drive/drive_duplicate_checker.py:924:            "drive_file_id_fk",
+src/drive/drive_duplicate_checker.py:926:            "drive_modified_time",
+src/drive/drive_duplicate_checker.py:963:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:969:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:970:                drive_file_version_id,
+src/drive/drive_duplicate_checker.py:979:            FROM drive_local_files
+src/drive/drive_duplicate_checker.py:980:            WHERE drive_file_id_fk = %s
+src/drive/drive_duplicate_checker.py:988:            "drive_file_id_fk",
+src/drive/drive_duplicate_checker.py:989:            "drive_file_version_id",
+src/drive/drive_duplicate_checker.py:1004:                (drive_file_db_id,),
+src/drive/drive_duplicate_checker.py:1020:    # Compare version with current Drive metadata
+src/drive/drive_duplicate_checker.py:1033:                "drive_modified_time"
+src/drive/drive_duplicate_checker.py:1118:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:1126:            INSERT INTO drive_file_versions (
+src/drive/drive_duplicate_checker.py:1127:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:1129:                drive_modified_time,
+src/drive/drive_duplicate_checker.py:1145:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:1149:                drive_modified_time =
+src/drive/drive_duplicate_checker.py:1150:                    EXCLUDED.drive_modified_time,
+src/drive/drive_duplicate_checker.py:1163:                    drive_file_db_id,
+src/drive/drive_duplicate_checker.py:1181:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:1188:                dd.canonical_drive_file_id
+src/drive/drive_duplicate_checker.py:1189:            FROM drive_duplicates dd
+src/drive/drive_duplicate_checker.py:1190:            JOIN drive_duplicate_members dm
+src/drive/drive_duplicate_checker.py:1196:              AND dm.drive_file_id_fk <> %s
+src/drive/drive_duplicate_checker.py:1207:                    drive_file_db_id,
+src/drive/drive_duplicate_checker.py:1218:            "canonical_drive_file_id": row[1],
+src/drive/drive_duplicate_checker.py:1228:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:1233:            INSERT INTO drive_duplicate_members (
+src/drive/drive_duplicate_checker.py:1235:                drive_file_id_fk,
+src/drive/drive_duplicate_checker.py:1245:                drive_file_id_fk
+src/drive/drive_duplicate_checker.py:1258:                    drive_file_db_id,
+src/drive/drive_duplicate_checker.py:1269:        drive_file_db_id: int,
+src/drive/drive_duplicate_checker.py:1274:            UPDATE drive_files
+src/drive/drive_duplicate_checker.py:1287:                    drive_file_db_id,
+src/drive/drive_duplicate_checker.py:1326:        if result.canonical_drive_file_db_id is not None:
+src/drive/drive_duplicate_checker.py:1330:                f"{result.canonical_drive_file_db_id}"
+src/drive/drive_duplicate_checker.py:1345:    checker = DriveDuplicateChecker()
+src/drive/drive_duplicate_checker.py:1353:        "GOOGLE DRIVE DUPLICATE / VERSION CHECK COMPLETED"
+src/drive/drive_duplicate_checker.py:1398:    print("[DRIVE WRITE] NO")
+src/drive/__init__.py:4:Alcalay - Google Drive package.
+src/drive/drive_registry.py:4:Alcalay - Google Drive Registry
+src/drive/drive_registry.py:7:Registers the complete Alcalay Google Drive hierarchy in PostgreSQL.
+src/drive/drive_registry.py:9:Drive hierarchy:
+src/drive/drive_registry.py:15:            +-- Gmail
+src/drive/drive_registry.py:18:            |           +-- frank.avner@gmail.com
+src/drive/drive_registry.py:33:    drive_folders.parent_drive_file_id
+src/drive/drive_registry.py:37:    drive_files.parent_drive_file_id
+src/drive/drive_registry.py:51:    - Modify files in Google Drive.
+src/drive/drive_registry.py:56:    Google Drive
+src/drive/drive_registry.py:59:    DriveConnection
+src/drive/drive_registry.py:62:    DriveRepository
+src/drive/drive_registry.py:65:    DriveScanner
+src/drive/drive_registry.py:68:    DriveRegistry
+src/drive/drive_registry.py:74:from __future__ import annotations
+src/drive/drive_registry.py:76:import sys
+src/drive/drive_registry.py:77:from dataclasses import dataclass
+src/drive/drive_registry.py:79:from src.database.connection import DatabaseConnection
+src/drive/drive_registry.py:80:from src.drive.drive_connection import DriveConnection
+src/drive/drive_registry.py:81:from src.drive.drive_repository import DriveRepository
+src/drive/drive_registry.py:82:from src.drive.drive_scanner import DriveItem, DriveScanner
+src/drive/drive_registry.py:87:SYNC_TYPE = "DRIVE_METADATA_SCAN"
+src/drive/drive_registry.py:114:class DriveRegistry:
+src/drive/drive_registry.py:116:    Registers the complete Google Drive hierarchy in PostgreSQL.
+src/drive/drive_registry.py:120:        - Drive authentication
+src/drive/drive_registry.py:121:        - Drive scanning
+src/drive/drive_registry.py:126:    This class only reads Drive metadata and stores it in PostgreSQL.
+src/drive/drive_registry.py:131:        drive_connection: DriveConnection | None = None,
+src/drive/drive_registry.py:132:        database_connection: DatabaseConnection | None = None,
+src/drive/drive_registry.py:136:        self.drive_connection = (
+src/drive/drive_registry.py:137:            drive_connection
+src/drive/drive_registry.py:138:            if drive_connection is not None
+src/drive/drive_registry.py:139:            else DriveConnection(
+src/drive/drive_registry.py:147:            else DatabaseConnection()
+src/drive/drive_registry.py:150:        self.repository: DriveRepository | None = None
+src/drive/drive_registry.py:151:        self.scanner: DriveScanner | None = None
+src/drive/drive_registry.py:162:        Connect to Google Drive and initialize:
+src/drive/drive_registry.py:164:            DriveRepository
+src/drive/drive_registry.py:165:            DriveScanner
+src/drive/drive_registry.py:171:        email = self.drive_connection.connect(
+src/drive/drive_registry.py:175:        self.repository = DriveRepository(
+src/drive/drive_registry.py:176:            self.drive_connection
+src/drive/drive_registry.py:179:        self.scanner = DriveScanner(
+src/drive/drive_registry.py:180:            self.drive_connection,
+src/drive/drive_registry.py:188:        Ensure DriveRepository and DriveScanner exist.
+src/drive/drive_registry.py:193:                "DriveRepository לא אותחל. "
+src/drive/drive_registry.py:199:                "DriveScanner לא אותחל. "
+src/drive/drive_registry.py:220:                FROM drive_repositories
+src/drive/drive_registry.py:256:                INSERT INTO drive_sync_runs
+src/drive/drive_registry.py:283:                "לא ניתן ליצור drive_sync_runs."
+src/drive/drive_registry.py:304:                UPDATE drive_sync_runs
+src/drive/drive_registry.py:344:        item: DriveItem,
+src/drive/drive_registry.py:347:        Insert or update one Drive folder.
+src/drive/drive_registry.py:363:                    parent_drive_file_id,
+src/drive/drive_registry.py:369:                FROM drive_folders
+src/drive/drive_registry.py:371:                  AND drive_file_id = %s
+src/drive/drive_registry.py:385:                    INSERT INTO drive_folders
+src/drive/drive_registry.py:388:                        drive_file_id,
+src/drive/drive_registry.py:389:                        parent_drive_file_id,
+src/drive/drive_registry.py:452:                UPDATE drive_folders
+src/drive/drive_registry.py:454:                    parent_drive_file_id = %s,
+src/drive/drive_registry.py:463:                  AND drive_file_id = %s
+src/drive/drive_registry.py:492:        item: DriveItem,
+src/drive/drive_registry.py:495:        Insert or update one Drive file.
+src/drive/drive_registry.py:500:                PostgreSQL drive_files.id,
+src/drive/drive_registry.py:511:                    parent_drive_file_id,
+src/drive/drive_registry.py:520:                FROM drive_files
+src/drive/drive_registry.py:522:                  AND drive_file_id = %s
+src/drive/drive_registry.py:536:                    INSERT INTO drive_files
+src/drive/drive_registry.py:539:                        drive_file_id,
+src/drive/drive_registry.py:540:                        parent_drive_file_id,
+src/drive/drive_registry.py:592:                        f"Drive file: {item.file_id}"
+src/drive/drive_registry.py:624:                UPDATE drive_files
+src/drive/drive_registry.py:626:                    parent_drive_file_id = %s,
+src/drive/drive_registry.py:668:        drive_file_db_id: int,
+src/drive/drive_registry.py:673:        Register a FILE in drive_sync_items.
+src/drive/drive_registry.py:676:        drive_sync_items.drive_file_id_fk references drive_files.id.
+src/drive/drive_registry.py:683:                INSERT INTO drive_sync_items
+src/drive/drive_registry.py:686:                    drive_file_id_fk,
+src/drive/drive_registry.py:706:                    drive_file_db_id,
+src/drive/drive_registry.py:717:    def _get_root_item(self) -> DriveItem:
+src/drive/drive_registry.py:721:        DriveRepository already contains the configured root folder ID.
+src/drive/drive_registry.py:722:        DriveConnection.verify_folder() gives us its metadata.
+src/drive/drive_registry.py:731:        metadata = self.drive_connection.verify_folder(
+src/drive/drive_registry.py:735:        return DriveItem(
+src/drive/drive_registry.py:775:    def _get_level_two_items(self) -> list[DriveItem]:
+src/drive/drive_registry.py:779:            Gmail
+src/drive/drive_registry.py:792:        result: list[DriveItem] = []
+src/drive/drive_registry.py:796:            self.repository.get_gmail_folder(),
+src/drive/drive_registry.py:805:            metadata = self.drive_connection.verify_folder(
+src/drive/drive_registry.py:810:                DriveItem(
+src/drive/drive_registry.py:855:    ) -> list[DriveItem]:
+src/drive/drive_registry.py:874:        all_items: list[DriveItem] = []
+src/drive/drive_registry.py:882:                "Gmail",
+src/drive/drive_registry.py:883:                self.scanner.scan_gmail,
+src/drive/drive_registry.py:934:        connection = self.database_connection.connect()
+src/drive/drive_registry.py:954:                "STARTING GOOGLE DRIVE METADATA REGISTRY"
+src/drive/drive_registry.py:1000:            # LEVEL 2 - Documents/Gmail/Database/Backups
+src/drive/drive_registry.py:1065:                        drive_file_db_id, result = (
+src/drive/drive_registry.py:1080:                                drive_file_db_id,
+src/drive/drive_registry.py:1082:                                "New Drive metadata registered",
+src/drive/drive_registry.py:1090:                                drive_file_db_id,
+src/drive/drive_registry.py:1092:                                "Existing Drive metadata updated",
+src/drive/drive_registry.py:1100:                                drive_file_db_id,
+src/drive/drive_registry.py:1102:                                "Drive metadata checked; no metadata change",
+src/drive/drive_registry.py:1143:                "GOOGLE DRIVE METADATA REGISTRY COMPLETED"
+src/drive/drive_registry.py:1211:        Connect to Google Drive and immediately run the registry.
+src/drive/drive_registry.py:1214:        email = self.connect(
+src/drive/drive_registry.py:1235:        python -m src.drive.drive_registry
+src/drive/drive_registry.py:1239:        python -m src.drive.drive_registry user@example.com
+src/drive/drive_registry.py:1249:        registry = DriveRegistry()
+src/drive/drive_registry.py:1270:        print("DRIVE REGISTRY FAILED")
+src/drive/drive_downloader.py:4:Alcalay - Google Drive Downloader / Exporter
+src/drive/drive_downloader.py:8:READY_FOR_DOWNLOAD by drive_duplicate_checker.py.
+src/drive/drive_downloader.py:12:    drive_files
+src/drive/drive_downloader.py:16:    Google Drive download/export
+src/drive/drive_downloader.py:24:    drive_file_versions
+src/drive/drive_downloader.py:25:    drive_local_files
+src/drive/drive_downloader.py:26:    drive_files
+src/drive/drive_downloader.py:30:- This module does NOT search Google Drive.
+src/drive/drive_downloader.py:38:- Google Drive is read-only.
+src/drive/drive_downloader.py:41:from __future__ import annotations
+src/drive/drive_downloader.py:43:import hashlib
+src/drive/drive_downloader.py:44:import re
+src/drive/drive_downloader.py:45:import sys
+src/drive/drive_downloader.py:46:from pathlib import Path
+src/drive/drive_downloader.py:47:from typing import Any
+src/drive/drive_downloader.py:49:from googleapiclient.http import MediaIoBaseDownload
+src/drive/drive_downloader.py:66:from src.database.connection import DatabaseConnection
+src/drive/drive_downloader.py:67:from src.drive.drive_connection import DriveConnection
+src/drive/drive_downloader.py:74:LOCAL_ROOT = PROJECT_ROOT / "storage" / "drive"
+src/drive/drive_downloader.py:106:class DriveDownloader:
+src/drive/drive_downloader.py:109:        self.db = DatabaseConnection()
+src/drive/drive_downloader.py:112:        # DriveConnection owns the actual Google Drive API service.
+src/drive/drive_downloader.py:113:        self.drive_connection = None
+src/drive/drive_downloader.py:114:        self.drive = None
+src/drive/drive_downloader.py:121:        self.connection = self.db.connect()
+src/drive/drive_downloader.py:123:        self.drive_connection = DriveConnection(
+src/drive/drive_downloader.py:124:            account_email="frank.avner@gmail.com"
+src/drive/drive_downloader.py:129:        # DriveConnection.connect() returns the connected
+src/drive/drive_downloader.py:132:        # The actual Google Drive API service is stored in:
+src/drive/drive_downloader.py:134:        #     self.drive_connection.service
+src/drive/drive_downloader.py:136:        self.drive_connection.connect()
+src/drive/drive_downloader.py:138:        self.drive = self.drive_connection.service
+src/drive/drive_downloader.py:140:        if self.drive is None:
+src/drive/drive_downloader.py:142:                "Google Drive service was not created."
+src/drive/drive_downloader.py:160:                FROM drive_repositories
+src/drive/drive_downloader.py:195:                    df.drive_file_id,
+src/drive/drive_downloader.py:196:                    df.parent_drive_file_id,
+src/drive/drive_downloader.py:211:                    v.drive_modified_time,
+src/drive/drive_downloader.py:219:                FROM drive_files df
+src/drive/drive_downloader.py:221:                JOIN drive_file_versions v
+src/drive/drive_downloader.py:222:                  ON v.drive_file_id_fk = df.id
+src/drive/drive_downloader.py:270:                FROM drive_file_versions
+src/drive/drive_downloader.py:323:        drive_file_id = str(
+src/drive/drive_downloader.py:324:            file_record["drive_file_id"]
+src/drive/drive_downloader.py:355:            / drive_file_id
+src/drive/drive_downloader.py:401:    # Download regular Drive file
+src/drive/drive_downloader.py:406:        drive_file_id: str,
+src/drive/drive_downloader.py:410:        if self.drive is None:
+src/drive/drive_downloader.py:412:                "Google Drive service is not connected."
+src/drive/drive_downloader.py:416:            self.drive
+src/drive/drive_downloader.py:419:                fileId=drive_file_id,
+src/drive/drive_downloader.py:421:                supportsAllDrives=True,
+src/drive/drive_downloader.py:458:        drive_file_id: str,
+src/drive/drive_downloader.py:463:        if self.drive is None:
+src/drive/drive_downloader.py:465:                "Google Drive service is not connected."
+src/drive/drive_downloader.py:481:            self.drive
+src/drive/drive_downloader.py:484:                fileId=drive_file_id,
+src/drive/drive_downloader.py:526:        drive_file_id = str(
+src/drive/drive_downloader.py:527:            file_record["drive_file_id"]
+src/drive/drive_downloader.py:544:                drive_file_id=drive_file_id,
+src/drive/drive_downloader.py:556:            drive_file_id=drive_file_id,
+src/drive/drive_downloader.py:579:                UPDATE drive_file_versions
+src/drive/drive_downloader.py:600:    # Update drive_files
+src/drive/drive_downloader.py:603:    def update_drive_file(
+src/drive/drive_downloader.py:617:                UPDATE drive_files
+src/drive/drive_downloader.py:659:                UPDATE drive_local_files
+src/drive/drive_downloader.py:662:                WHERE drive_file_id_fk = %s
+src/drive/drive_downloader.py:669:                INSERT INTO drive_local_files
+src/drive/drive_downloader.py:671:                    drive_file_id_fk,
+src/drive/drive_downloader.py:672:                    drive_file_version_id,
+src/drive/drive_downloader.py:695:                    drive_file_id_fk =
+src/drive/drive_downloader.py:696:                        EXCLUDED.drive_file_id_fk,
+src/drive/drive_downloader.py:697:                    drive_file_version_id =
+src/drive/drive_downloader.py:698:                        EXCLUDED.drive_file_version_id,
+src/drive/drive_downloader.py:741:                UPDATE drive_file_versions
+src/drive/drive_downloader.py:755:                UPDATE drive_files
+src/drive/drive_downloader.py:794:        drive_file_id = str(
+src/drive/drive_downloader.py:795:            file_record["drive_file_id"]
+src/drive/drive_downloader.py:815:            f"[DRIVE FILE ID] "
+src/drive/drive_downloader.py:816:            f"{drive_file_id}"
+src/drive/drive_downloader.py:827:        # Safety check BEFORE Google Drive download/export
+src/drive/drive_downloader.py:903:                    FROM drive_file_versions
+src/drive/drive_downloader.py:943:                self.update_drive_file(
+src/drive/drive_downloader.py:1009:                    "Google Drive download/export "
+src/drive/drive_downloader.py:1072:            # Update drive_files
+src/drive/drive_downloader.py:1075:            self.update_drive_file(
+src/drive/drive_downloader.py:1152:            self.connect()
+src/drive/drive_downloader.py:1173:                "STARTING GOOGLE DRIVE "
+src/drive/drive_downloader.py:1185:                "[DRIVE WRITE] NO"
+src/drive/drive_downloader.py:1246:                "GOOGLE DRIVE "
+src/drive/drive_downloader.py:1273:                "[DRIVE WRITE] NO"
+src/drive/drive_downloader.py:1294:    downloader = DriveDownloader()
+src/drive/drive_repository.py:4:Alcalay - Google Drive Repository
+src/drive/drive_repository.py:7:Logical representation of the Alcalay Google Drive repository.
+src/drive/drive_repository.py:13:    ├── Gmail
+src/drive/drive_repository.py:20:    - Verify repository folders through DriveConnection.
+src/drive/drive_repository.py:34:from __future__ import annotations
+src/drive/drive_repository.py:36:from dataclasses import dataclass
+src/drive/drive_repository.py:37:from typing import Any
+src/drive/drive_repository.py:39:from src.drive.drive_connection import DriveConnection
+src/drive/drive_repository.py:43:class DriveFolder:
+src/drive/drive_repository.py:45:    Represents one configured Google Drive folder.
+src/drive/drive_repository.py:53:class DriveRepository:
+src/drive/drive_repository.py:55:    Represents the configured Alcalay Google Drive repository.
+src/drive/drive_repository.py:61:        gmail
+src/drive/drive_repository.py:69:        ("gmail_folder_id", "gmail", "Gmail"),
+src/drive/drive_repository.py:76:        connection: DriveConnection,
+src/drive/drive_repository.py:81:            DriveConnection,
+src/drive/drive_repository.py:84:                "connection חייב להיות מופע של DriveConnection."
+src/drive/drive_repository.py:89:        self._folders: dict[str, DriveFolder] = {}
+src/drive/drive_repository.py:109:            self._folders[key] = DriveFolder(
+src/drive/drive_repository.py:118:    ) -> DriveFolder:
+src/drive/drive_repository.py:132:    def get_root_folder(self) -> DriveFolder:
+src/drive/drive_repository.py:136:    def get_documents_folder(self) -> DriveFolder:
+src/drive/drive_repository.py:140:    def get_gmail_folder(self) -> DriveFolder:
+src/drive/drive_repository.py:142:        return self.get_folder("gmail")
+src/drive/drive_repository.py:144:    def get_database_folder(self) -> DriveFolder:
+src/drive/drive_repository.py:148:    def get_backups_folder(self) -> DriveFolder:
+src/drive/drive_repository.py:154:    ) -> dict[str, DriveFolder]:
+src/drive/drive_repository.py:173:                "Google Drive עדיין לא מחובר. "
+src/drive/drive_repository.py:174:                "יש לבצע connection.connect() לפני verify()."
+src/drive/drive_repository.py:200:            "gmail": "gmail",
+src/drive/drive_keyword_filter.py:4:Alcalay - Google Drive Content Keyword Filter
+src/drive/drive_keyword_filter.py:7:Searches the indexed content of Google Drive files for the
+src/drive/drive_keyword_filter.py:12:    PostgreSQL drive_files
+src/drive/drive_keyword_filter.py:21:    Google Drive fullText search
+src/drive/drive_keyword_filter.py:24:    Match Google Drive file IDs against PostgreSQL
+src/drive/drive_keyword_filter.py:27:    drive_file_keyword_matches
+src/drive/drive_keyword_filter.py:30:    drive_files.is_relevant = TRUE
+src/drive/drive_keyword_filter.py:36:    - This module does NOT modify Google Drive.
+src/drive/drive_keyword_filter.py:43:    src/drive/drive_keyword_filter.py
+src/drive/drive_keyword_filter.py:48:from __future__ import annotations
+src/drive/drive_keyword_filter.py:50:import sys
+src/drive/drive_keyword_filter.py:51:from dataclasses import dataclass
+src/drive/drive_keyword_filter.py:52:from pathlib import Path
+src/drive/drive_keyword_filter.py:53:from typing import Any
+src/drive/drive_keyword_filter.py:76:    from src.database.connection import DatabaseConnection
+src/drive/drive_keyword_filter.py:78:    database = DatabaseConnection()
+src/drive/drive_keyword_filter.py:80:    return database.connect()
+src/drive/drive_keyword_filter.py:90:    One enabled Google Drive keyword rule.
+src/drive/drive_keyword_filter.py:104:class DriveFileRecord:
+src/drive/drive_keyword_filter.py:106:    PostgreSQL representation of a Drive file.
+src/drive/drive_keyword_filter.py:110:    drive_file_id: str
+src/drive/drive_keyword_filter.py:120:class DriveContentKeywordFilter:
+src/drive/drive_keyword_filter.py:122:    Searches Google Drive indexed content for configured keywords.
+src/drive/drive_keyword_filter.py:151:                "Google Drive עדיין לא מחובר."
+src/drive/drive_keyword_filter.py:169:            FROM drive_repositories
+src/drive/drive_keyword_filter.py:180:                f"'{self.REPOSITORY_KEY}' ב-drive_repositories."
+src/drive/drive_keyword_filter.py:193:            FROM drive_keyword_rule_sets
+src/drive/drive_keyword_filter.py:226:            FROM drive_keyword_rules
+src/drive/drive_keyword_filter.py:257:    ) -> list[DriveFileRecord]:
+src/drive/drive_keyword_filter.py:272:                drive_file_id,
+src/drive/drive_keyword_filter.py:276:            FROM drive_files
+src/drive/drive_keyword_filter.py:285:        files: list[DriveFileRecord] = []
+src/drive/drive_keyword_filter.py:290:                DriveFileRecord(
+src/drive/drive_keyword_filter.py:292:                    drive_file_id=str(row[1]),
+src/drive/drive_keyword_filter.py:306:    # Google Drive query helpers
+src/drive/drive_keyword_filter.py:310:    def _escape_drive_query_value(
+src/drive/drive_keyword_filter.py:314:        Escape a value for a Google Drive q expression.
+src/drive/drive_keyword_filter.py:316:        Google Drive query strings use single quotes around string
+src/drive/drive_keyword_filter.py:338:        Build a Google Drive fullText query.
+src/drive/drive_keyword_filter.py:346:        Google Drive treats the double-quoted right operand as an
+src/drive/drive_keyword_filter.py:357:        escaped = cls._escape_drive_query_value(
+src/drive/drive_keyword_filter.py:375:    def _search_google_drive(
+src/drive/drive_keyword_filter.py:380:        Search Google Drive's indexed full text for one keyword.
+src/drive/drive_keyword_filter.py:383:            Set of Google Drive file IDs.
+src/drive/drive_keyword_filter.py:388:            Google Drive does not allow orderBy when a fullText
+src/drive/drive_keyword_filter.py:408:                    spaces="drive",
+src/drive/drive_keyword_filter.py:412:                    supportsAllDrives=True,
+src/drive/drive_keyword_filter.py:413:                    includeItemsFromAllDrives=True,
+src/drive/drive_keyword_filter.py:465:        drive_file: DriveFileRecord,
+src/drive/drive_keyword_filter.py:476:            INSERT INTO drive_file_keyword_matches
+src/drive/drive_keyword_filter.py:478:                drive_file_id_fk,
+src/drive/drive_keyword_filter.py:492:                drive_file_id_fk,
+src/drive/drive_keyword_filter.py:502:                drive_file.id,
+src/drive/drive_keyword_filter.py:516:        drive_file: DriveFileRecord,
+src/drive/drive_keyword_filter.py:520:        Mark the Drive file as relevant because of content.
+src/drive/drive_keyword_filter.py:525:            UPDATE drive_files
+src/drive/drive_keyword_filter.py:535:                drive_file.id,
+src/drive/drive_keyword_filter.py:542:        drive_file: DriveFileRecord,
+src/drive/drive_keyword_filter.py:550:            UPDATE drive_files
+src/drive/drive_keyword_filter.py:563:                drive_file.id,
+src/drive/drive_keyword_filter.py:631:                candidate_by_drive_id: dict[
+src/drive/drive_keyword_filter.py:633:                    DriveFileRecord,
+src/drive/drive_keyword_filter.py:635:                    item.drive_file_id: item
+src/drive/drive_keyword_filter.py:639:                candidate_drive_ids = set(
+src/drive/drive_keyword_filter.py:640:                    candidate_by_drive_id.keys()
+src/drive/drive_keyword_filter.py:658:                            self._search_google_drive(
+src/drive/drive_keyword_filter.py:669:                            & candidate_drive_ids
+src/drive/drive_keyword_filter.py:683:                        for drive_id in relevant_ids:
+src/drive/drive_keyword_filter.py:685:                            drive_file = (
+src/drive/drive_keyword_filter.py:686:                                candidate_by_drive_id[
+src/drive/drive_keyword_filter.py:687:                                    drive_id
+src/drive/drive_keyword_filter.py:693:                                drive_file,
+src/drive/drive_keyword_filter.py:699:                                drive_file,
+src/drive/drive_keyword_filter.py:729:                relevant_drive_ids: set[str] = set()
+src/drive/drive_keyword_filter.py:740:                    relevant_drive_ids.update(
+src/drive/drive_keyword_filter.py:742:                        & candidate_drive_ids
+src/drive/drive_keyword_filter.py:745:                for drive_file in candidates:
+src/drive/drive_keyword_filter.py:748:                        drive_file.drive_file_id
+src/drive/drive_keyword_filter.py:749:                        in relevant_drive_ids
+src/drive/drive_keyword_filter.py:755:                        drive_file,
+src/drive/drive_keyword_filter.py:767:                    relevant_drive_ids
+src/drive/drive_keyword_filter.py:794:            "GOOGLE DRIVE CONTENT KEYWORD FILTER COMPLETED"
+src/drive/drive_keyword_filter.py:848:            "[DRIVE WRITE]      NO"
+src/drive/drive_keyword_filter.py:884:        "STARTING GOOGLE DRIVE CONTENT KEYWORD FILTER"
+src/drive/drive_keyword_filter.py:890:        from src.drive.drive_connection import (
+src/drive/drive_keyword_filter.py:891:            DriveConnection,
+src/drive/drive_keyword_filter.py:894:        connection = DriveConnection(
+src/drive/drive_keyword_filter.py:895:            "frank.avner@gmail.com"
+src/drive/drive_keyword_filter.py:898:        email = connection.connect()
+src/drive/drive_keyword_filter.py:905:            "[SEARCH]         Google Drive fullText"
+src/drive/drive_keyword_filter.py:913:            "[DRIVE WRITE]    NO"
+src/drive/drive_keyword_filter.py:919:            DriveContentKeywordFilter(
+src/drive/drive_keyword_filter.py:942:            "GOOGLE DRIVE CONTENT KEYWORD FILTER FAILED"
+src/drive/drive_connection.py:4:Alcalay - Google Drive Connection
+src/drive/drive_connection.py:7:Google Drive OAuth connection module.
+src/drive/drive_connection.py:10:    - Connect to Google Drive using OAuth.
+src/drive/drive_connection.py:12:    - Keep a separate OAuth token for Drive.
+src/drive/drive_connection.py:13:    - Read the Alcalay Drive repository configuration.
+src/drive/drive_connection.py:15:    - Allow read/write access required by Drive synchronization.
+src/drive/drive_connection.py:26:The Drive scope is intentionally read/write because Alcalay
+src/drive/drive_connection.py:27:must be able to create and update files during LOCAL_TO_DRIVE
+src/drive/drive_connection.py:31:from __future__ import annotations
+src/drive/drive_connection.py:33:import json
+src/drive/drive_connection.py:34:from pathlib import Path
+src/drive/drive_connection.py:35:from typing import Any
+src/drive/drive_connection.py:37:from google_auth_oauthlib.flow import InstalledAppFlow
+src/drive/drive_connection.py:38:from google.oauth2.credentials import Credentials
+src/drive/drive_connection.py:39:from google.auth.transport.requests import Request
+src/drive/drive_connection.py:40:from googleapiclient.discovery import build
+src/drive/drive_connection.py:51:    / "gmail"
+src/drive/drive_connection.py:55:DRIVE_DIR = PROJECT_ROOT / "config" / "drive"
+src/drive/drive_connection.py:56:DRIVE_TOKENS_DIR = DRIVE_DIR / "tokens"
+src/drive/drive_connection.py:61:# Alcalay needs both read and write access to Google Drive.
+src/drive/drive_connection.py:63:# drive.readonly is NOT sufficient for:
+src/drive/drive_connection.py:67:# We therefore use the full Drive scope.
+src/drive/drive_connection.py:71:    "https://www.googleapis.com/auth/drive"
+src/drive/drive_connection.py:80:    "gmail_folder_id": "Gmail",
+src/drive/drive_connection.py:92:    return DRIVE_TOKENS_DIR / f"{normalized_email}.json"
+src/drive/drive_connection.py:127:            config["google_drive"]
+src/drive/drive_connection.py:134:            "לא נמצאה הגדרת Google Drive repository "
+src/drive/drive_connection.py:140:            "הגדרת Alcalay Google Drive repository אינה תקינה."
+src/drive/drive_connection.py:151:                "חסר Folder ID בהגדרת Google Drive: "
+src/drive/drive_connection.py:179:    the Drive read/write scope required by Alcalay.
+src/drive/drive_connection.py:181:    Existing tokens may still contain only drive.readonly.
+src/drive/drive_connection.py:182:    In that case they must NOT be reused for LOCAL_TO_DRIVE.
+src/drive/drive_connection.py:201:class DriveConnection:
+src/drive/drive_connection.py:203:    Handles authenticated access to Google Drive.
+src/drive/drive_connection.py:205:    The connection provides the Drive permissions required by
+src/drive/drive_connection.py:211:        - Search Drive.
+src/drive/drive_connection.py:249:        DRIVE_DIR.mkdir(
+src/drive/drive_connection.py:254:        DRIVE_TOKENS_DIR.mkdir(
+src/drive/drive_connection.py:284:                    # A token created with drive.readonly is NOT enough
+src/drive/drive_connection.py:285:                    # for LOCAL_TO_DRIVE.
+src/drive/drive_connection.py:356:            "drive",
+src/drive/drive_connection.py:364:        # the authenticated Drive account.
+src/drive/drive_connection.py:387:                "Google Drive עדיין לא מחובר."
+src/drive/drive_connection.py:423:                "Google Drive עדיין לא מחובר."
+src/drive/drive_connection.py:443:                supportsAllDrives=True,
+src/drive/drive_connection.py:456:                "Google Drive עדיין לא מחובר."
+src/drive/drive_sync.py:4:Alcalay - Google Drive <-> Local Synchronization
+src/drive/drive_sync.py:9:    DRIVE_TO_LOCAL
+src/drive/drive_sync.py:10:    LOCAL_TO_DRIVE
+src/drive/drive_sync.py:12:LOCAL_TO_DRIVE
+src/drive/drive_sync.py:15:The local storage is synchronized to the Alcalay Google Drive repository.
+src/drive/drive_sync.py:19:    storage/gmail/<account>/...
+src/drive/drive_sync.py:21:    Alcalay/Gmail/<account>/...
+src/drive/drive_sync.py:37:    - drive_local_files.local_path is the per-file checkpoint.
+src/drive/drive_sync.py:43:    - Existing Drive files are reconciled instead of blindly creating
+src/drive/drive_sync.py:45:    - Google Drive folders are created automatically when required.
+src/drive/drive_sync.py:49:    MD5 is used for LOCAL_TO_DRIVE because Google Drive exposes
+src/drive/drive_sync.py:50:    md5Checksum for binary files and drive_local_files defaults to MD5.
+src/drive/drive_sync.py:52:The module does not delete local or Drive files.
+src/drive/drive_sync.py:55:from __future__ import annotations
+src/drive/drive_sync.py:57:import hashlib
+src/drive/drive_sync.py:58:import json
+src/drive/drive_sync.py:59:import mimetypes
+src/drive/drive_sync.py:60:import os
+src/drive/drive_sync.py:61:import sys
+src/drive/drive_sync.py:62:import threading
+src/drive/drive_sync.py:63:from datetime import datetime, timezone
+src/drive/drive_sync.py:64:from pathlib import Path
+src/drive/drive_sync.py:65:from typing import Any, Dict, List, Optional
+src/drive/drive_sync.py:67:from googleapiclient.errors import HttpError
+src/drive/drive_sync.py:68:from googleapiclient.http import MediaFileUpload
+src/drive/drive_sync.py:81:from src.database.connection import DatabaseConnection
+src/drive/drive_sync.py:82:from src.drive.drive_connection import DriveConnection
+src/drive/drive_sync.py:83:from src.drive.drive_downloader import DriveDownloader
+src/drive/drive_sync.py:92:DIRECTION_DRIVE_TO_LOCAL = "DRIVE_TO_LOCAL"
+src/drive/drive_sync.py:93:DIRECTION_LOCAL_TO_DRIVE = "LOCAL_TO_DRIVE"
+src/drive/drive_sync.py:103:    "gmail",
+src/drive/drive_sync.py:104:    "drive",
+src/drive/drive_sync.py:129:# 512 MB is the maximum transfer budget per LOCAL_TO_DRIVE run.
+src/drive/drive_sync.py:181:class DriveSync:
+src/drive/drive_sync.py:185:        direction: str = DIRECTION_DRIVE_TO_LOCAL,
+src/drive/drive_sync.py:190:        self.db = DatabaseConnection()
+src/drive/drive_sync.py:193:        self.drive_connection: Optional[DriveConnection] = None
+src/drive/drive_sync.py:194:        self.drive = None
+src/drive/drive_sync.py:199:        self.account_email = "frank.avner@gmail.com"
+src/drive/drive_sync.py:204:        self.downloader = DriveDownloader()
+src/drive/drive_sync.py:234:        # Cache Drive folder IDs.
+src/drive/drive_sync.py:312:            name="alcalay-drive-sync-stop-listener",
+src/drive/drive_sync.py:368:    def is_retryable_drive_error(
+src/drive/drive_sync.py:421:        self.connection = self.db.connect()
+src/drive/drive_sync.py:425:        self.ensure_drive_connection()
+src/drive/drive_sync.py:433:            self.downloader.drive = self.drive
+src/drive/drive_sync.py:451:            FROM drive_repositories
+src/drive/drive_sync.py:465:                "Google Drive repository "
+src/drive/drive_sync.py:478:    def ensure_drive_connection(self) -> None:
+src/drive/drive_sync.py:480:        self.drive_connection = DriveConnection(
+src/drive/drive_sync.py:486:            self.drive_connection.connect()
+src/drive/drive_sync.py:490:            # DriveConnection.connect() returns the email address.
+src/drive/drive_sync.py:491:            # The actual Google Drive API service is:
+src/drive/drive_sync.py:493:            #     self.drive_connection.service
+src/drive/drive_sync.py:495:            self.drive = self.drive_connection.service
+src/drive/drive_sync.py:498:                self.drive_connection.account_email
+src/drive/drive_sync.py:514:        if self.drive is None:
+src/drive/drive_sync.py:516:                "Google Drive service was not created"
+src/drive/drive_sync.py:519:        self._verify_drive_service()
+src/drive/drive_sync.py:521:    def reconnect_drive(self) -> bool:
+src/drive/drive_sync.py:527:            "DRIVE_RECONNECT_START",
+src/drive/drive_sync.py:528:            message="מנסה להתחבר מחדש ל-Google Drive",
+src/drive/drive_sync.py:533:            self.ensure_drive_connection()
+src/drive/drive_sync.py:536:                self.downloader.drive = self.drive
+src/drive/drive_sync.py:541:                "DRIVE_RECONNECTED",
+src/drive/drive_sync.py:553:                "DRIVE_RECONNECT_ERROR",
+src/drive/drive_sync.py:559:    def _verify_drive_service(self) -> None:
+src/drive/drive_sync.py:561:        if self.drive is None:
+src/drive/drive_sync.py:563:                "Google Drive service is not available"
+src/drive/drive_sync.py:569:                self.drive
+src/drive/drive_sync.py:584:                "DRIVE_CONNECTED",
+src/drive/drive_sync.py:601:    # Drive query helpers
+src/drive/drive_sync.py:605:    def escape_drive_query(
+src/drive/drive_sync.py:621:        if not self.drive:
+src/drive/drive_sync.py:639:        safe_name = self.escape_drive_query(
+src/drive/drive_sync.py:654:                self.drive
+src/drive/drive_sync.py:658:                    spaces="drive",
+src/drive/drive_sync.py:663:                    supportsAllDrives=True,
+src/drive/drive_sync.py:664:                    includeItemsFromAllDrives=True,
+src/drive/drive_sync.py:690:    def create_drive_folder(
+src/drive/drive_sync.py:696:        if not self.drive:
+src/drive/drive_sync.py:698:                "Google Drive service is not available"
+src/drive/drive_sync.py:710:                self.drive
+src/drive/drive_sync.py:715:                    supportsAllDrives=True,
+src/drive/drive_sync.py:763:        return self.create_drive_folder(
+src/drive/drive_sync.py:768:    def resolve_drive_destination(
+src/drive/drive_sync.py:792:        # Gmail:
+src/drive/drive_sync.py:794:        # storage/gmail/frank.avner@gmail.com/...
+src/drive/drive_sync.py:798:        # Alcalay/Gmail/frank.avner@gmail.com/...
+src/drive/drive_sync.py:801:        if source_folder.lower() == "gmail":
+src/drive/drive_sync.py:805:                "Gmail",
+src/drive/drive_sync.py:1074:            return "GMAIL"
+src/drive/drive_sync.py:1094:    # Drive metadata
+src/drive/drive_sync.py:1097:    def current_drive_metadata(
+src/drive/drive_sync.py:1099:        drive_file_id: str,
+src/drive/drive_sync.py:1105:                self.drive
+src/drive/drive_sync.py:1108:                    fileId=drive_file_id,
+src/drive/drive_sync.py:1115:                    supportsAllDrives=True,
+src/drive/drive_sync.py:1127:    def search_drive_file(
+src/drive/drive_sync.py:1133:        safe_name = self.escape_drive_query(
+src/drive/drive_sync.py:1146:                self.drive
+src/drive/drive_sync.py:1150:                    spaces="drive",
+src/drive/drive_sync.py:1159:                    supportsAllDrives=True,
+src/drive/drive_sync.py:1160:                    includeItemsFromAllDrives=True,
+src/drive/drive_sync.py:1186:    def find_drive_file_by_local_path(
+src/drive/drive_sync.py:1198:                drive_file_id,
+src/drive/drive_sync.py:1199:                parent_drive_file_id,
+src/drive/drive_sync.py:1217:            FROM drive_files
+src/drive/drive_sync.py:1238:            "drive_file_id": row[2],
+src/drive/drive_sync.py:1239:            "parent_drive_file_id": row[3],
+src/drive/drive_sync.py:1259:    def create_drive_file_record(
+src/drive/drive_sync.py:1279:            INSERT INTO drive_files (
+src/drive/drive_sync.py:1281:                drive_file_id,
+src/drive/drive_sync.py:1282:                parent_drive_file_id,
+src/drive/drive_sync.py:1310:                drive_file_id
+src/drive/drive_sync.py:1313:                parent_drive_file_id =
+src/drive/drive_sync.py:1314:                    EXCLUDED.parent_drive_file_id,
+src/drive/drive_sync.py:1395:                "Failed to create/update drive_files record"
+src/drive/drive_sync.py:1398:        drive_file_db_id = int(
+src/drive/drive_sync.py:1405:        return drive_file_db_id
+src/drive/drive_sync.py:1407:    def update_drive_file_record(
+src/drive/drive_sync.py:1424:            UPDATE drive_files
+src/drive/drive_sync.py:1426:                parent_drive_file_id = %s,
+src/drive/drive_sync.py:1489:        drive_file_db_id: int,
+src/drive/drive_sync.py:1499:                drive_modified_time,
+src/drive/drive_sync.py:1509:            FROM drive_file_versions
+src/drive/drive_sync.py:1510:            WHERE drive_file_id_fk = %s
+src/drive/drive_sync.py:1514:            (drive_file_db_id,),
+src/drive/drive_sync.py:1527:            "drive_modified_time": row[2],
+src/drive/drive_sync.py:1541:        drive_file_db_id: int,
+src/drive/drive_sync.py:1550:            drive_file_db_id
+src/drive/drive_sync.py:1584:            INSERT INTO drive_file_versions (
+src/drive/drive_sync.py:1585:                drive_file_id_fk,
+src/drive/drive_sync.py:1587:                drive_modified_time,
+src/drive/drive_sync.py:1604:                drive_file_id_fk,
+src/drive/drive_sync.py:1608:                drive_modified_time =
+src/drive/drive_sync.py:1609:                    EXCLUDED.drive_modified_time,
+src/drive/drive_sync.py:1627:                drive_file_db_id,
+src/drive/drive_sync.py:1650:                "Failed to create drive_file_versions record"
+src/drive/drive_sync.py:1668:        drive_file_db_id: int,
+src/drive/drive_sync.py:1680:            UPDATE drive_local_files
+src/drive/drive_sync.py:1685:              AND drive_file_id_fk <> %s
+src/drive/drive_sync.py:1689:                drive_file_db_id,
+src/drive/drive_sync.py:1695:            INSERT INTO drive_local_files (
+src/drive/drive_sync.py:1696:                drive_file_id_fk,
+src/drive/drive_sync.py:1697:                drive_file_version_id,
+src/drive/drive_sync.py:1713:                drive_file_id_fk =
+src/drive/drive_sync.py:1714:                    EXCLUDED.drive_file_id_fk,
+src/drive/drive_sync.py:1715:                drive_file_version_id =
+src/drive/drive_sync.py:1716:                    EXCLUDED.drive_file_version_id,
+src/drive/drive_sync.py:1731:                drive_file_db_id,
+src/drive/drive_sync.py:1756:            INSERT INTO drive_sync_runs (
+src/drive/drive_sync.py:1792:                "Failed to create drive_sync_runs record"
+src/drive/drive_sync.py:1819:            UPDATE drive_sync_runs
+src/drive/drive_sync.py:1860:        drive_file_db_id: Optional[int],
+src/drive/drive_sync.py:1872:            INSERT INTO drive_sync_items (
+src/drive/drive_sync.py:1874:                drive_file_id_fk,
+src/drive/drive_sync.py:1887:                drive_file_db_id,
+src/drive/drive_sync.py:1901:                "Failed to create drive_sync_items record"
+src/drive/drive_sync.py:1927:            UPDATE drive_sync_items
+src/drive/drive_sync.py:1945:    # LOCAL_TO_DRIVE - upload
+src/drive/drive_sync.py:1970:                self.drive
+src/drive/drive_sync.py:1981:                    supportsAllDrives=True,
+src/drive/drive_sync.py:2000:    def update_existing_drive_file(
+src/drive/drive_sync.py:2002:        drive_file_id: str,
+src/drive/drive_sync.py:2015:                self.drive
+src/drive/drive_sync.py:2018:                    fileId=drive_file_id,
+src/drive/drive_sync.py:2026:                    supportsAllDrives=True,
+src/drive/drive_sync.py:2046:    # LOCAL_TO_DRIVE - durable checkpoint helpers
+src/drive/drive_sync.py:2089:        existing = self.find_drive_file_by_local_path(
+src/drive/drive_sync.py:2095:            drive_db_id = existing["id"]
+src/drive/drive_sync.py:2097:            self.update_drive_file_record(
+src/drive/drive_sync.py:2098:                drive_db_id,
+src/drive/drive_sync.py:2107:            drive_db_id = self.create_drive_file_record(
+src/drive/drive_sync.py:2115:            drive_db_id,
+src/drive/drive_sync.py:2124:            drive_db_id,
+src/drive/drive_sync.py:2133:        return drive_db_id
+src/drive/drive_sync.py:2136:    # LOCAL_TO_DRIVE
+src/drive/drive_sync.py:2139:    def sync_local_to_drive(
+src/drive/drive_sync.py:2167:        # This is done BEFORE searching/uploading to Drive.
+src/drive/drive_sync.py:2171:            self.find_drive_file_by_local_path(
+src/drive/drive_sync.py:2180:        # size is unchanged, verify the Drive file exists.
+src/drive/drive_sync.py:2203:                    metadata = self.current_drive_metadata(
+src/drive/drive_sync.py:2204:                        existing["drive_file_id"]
+src/drive/drive_sync.py:2209:                        drive_md5 = metadata.get(
+src/drive/drive_sync.py:2214:                        # Google Drive's MD5 allows us to avoid reading
+src/drive/drive_sync.py:2215:                        # the local file again when the Drive checksum
+src/drive/drive_sync.py:2220:                            drive_md5
+src/drive/drive_sync.py:2221:                            and drive_md5
+src/drive/drive_sync.py:2240:                    # File was deleted/not found in Drive.
+src/drive/drive_sync.py:2276:                    metadata = self.current_drive_metadata(
+src/drive/drive_sync.py:2277:                        existing["drive_file_id"]
+src/drive/drive_sync.py:2310:            self.resolve_drive_destination(
+src/drive/drive_sync.py:2316:        # If we have a DB mapping, first try that Drive file.
+src/drive/drive_sync.py:2326:                    self.current_drive_metadata(
+src/drive/drive_sync.py:2327:                        existing["drive_file_id"]
+src/drive/drive_sync.py:2355:                self.search_drive_file(
+src/drive/drive_sync.py:2362:        # Existing Drive file.
+src/drive/drive_sync.py:2367:            drive_id = existing_metadata["id"]
+src/drive/drive_sync.py:2369:            drive_md5 = existing_metadata.get(
+src/drive/drive_sync.py:2373:            drive_size = existing_metadata.get(
+src/drive/drive_sync.py:2377:            if drive_size is not None:
+src/drive/drive_sync.py:2378:                drive_size = int(
+src/drive/drive_sync.py:2379:                    drive_size
+src/drive/drive_sync.py:2387:                drive_md5
+src/drive/drive_sync.py:2388:                and drive_md5 == local_checksum
+src/drive/drive_sync.py:2389:                and drive_size == local_size
+src/drive/drive_sync.py:2392:                drive_db_id = (
+src/drive/drive_sync.py:2393:                    self.create_drive_file_record(
+src/drive/drive_sync.py:2402:                    drive_db_id,
+src/drive/drive_sync.py:2404:                    "Identical file already exists in Drive",
+src/drive/drive_sync.py:2410:                        drive_db_id,
+src/drive/drive_sync.py:2419:                        drive_db_id,
+src/drive/drive_sync.py:2442:                        drive_file_id=drive_id,
+src/drive/drive_sync.py:2462:            # Update the existing Drive file rather than creating a
+src/drive/drive_sync.py:2466:            drive_db_id = (
+src/drive/drive_sync.py:2467:                self.create_drive_file_record(
+src/drive/drive_sync.py:2476:                drive_db_id,
+src/drive/drive_sync.py:2478:                "Local file differs from Drive file",
+src/drive/drive_sync.py:2487:                    drive_file_id=drive_id,
+src/drive/drive_sync.py:2492:                    self.update_existing_drive_file(
+src/drive/drive_sync.py:2493:                        drive_id,
+src/drive/drive_sync.py:2499:                    drive_db_id,
+src/drive/drive_sync.py:2507:                self.update_drive_file_record(
+src/drive/drive_sync.py:2508:                    drive_db_id,
+src/drive/drive_sync.py:2516:                    drive_db_id,
+src/drive/drive_sync.py:2539:                    drive_file_id=drive_id,
+src/drive/drive_sync.py:2557:        # Completely new Drive file.
+src/drive/drive_sync.py:2584:            drive_db_id = (
+src/drive/drive_sync.py:2585:                self.create_drive_file_record(
+src/drive/drive_sync.py:2594:                drive_db_id,
+src/drive/drive_sync.py:2596:                "New local file uploaded to Drive",
+src/drive/drive_sync.py:2600:                drive_db_id,
+src/drive/drive_sync.py:2609:                drive_db_id,
+src/drive/drive_sync.py:2635:                drive_file_id=uploaded["id"],
+src/drive/drive_sync.py:2665:        drive_file_db_id: int,
+src/drive/drive_sync.py:2670:            drive_file_db_id,
+src/drive/drive_sync.py:2671:            "LOCAL_TO_DRIVE",
+src/drive/drive_sync.py:2681:    # DRIVE_TO_LOCAL
+src/drive/drive_sync.py:2684:    def get_drive_candidates(
+src/drive/drive_sync.py:2699:                df.drive_file_id,
+src/drive/drive_sync.py:2708:                df.parent_drive_file_id,
+src/drive/drive_sync.py:2715:                v.drive_modified_time,
+src/drive/drive_sync.py:2721:            FROM drive_files df
+src/drive/drive_sync.py:2725:                    drive_modified_time,
+src/drive/drive_sync.py:2731:                FROM drive_file_versions
+src/drive/drive_sync.py:2732:                WHERE drive_file_id_fk = df.id
+src/drive/drive_sync.py:2755:                    "drive_file_id": row[1],
+src/drive/drive_sync.py:2764:                    "parent_drive_file_id": row[10],
+src/drive/drive_sync.py:2771:                    "version_drive_modified_time": row[17],
+src/drive/drive_sync.py:2782:    def same_drive_state(
+src/drive/drive_sync.py:2791:        drive_size = metadata.get(
+src/drive/drive_sync.py:2795:        if drive_size is not None:
+src/drive/drive_sync.py:2798:                drive_size = int(
+src/drive/drive_sync.py:2799:                    drive_size
+src/drive/drive_sync.py:2806:            and drive_size is not None
+src/drive/drive_sync.py:2809:            ) != int(drive_size)
+src/drive/drive_sync.py:2813:        drive_md5 = metadata.get(
+src/drive/drive_sync.py:2819:            and drive_md5
+src/drive/drive_sync.py:2822:            ] != drive_md5
+src/drive/drive_sync.py:2826:        drive_modified = parse_dt(
+src/drive/drive_sync.py:2832:                "drive_modified_time"
+src/drive/drive_sync.py:2837:            drive_modified
+src/drive/drive_sync.py:2843:                    drive_modified
+src/drive/drive_sync.py:2852:    def sync_drive_to_local(
+src/drive/drive_sync.py:2860:        drive_db_id = record["id"]
+src/drive/drive_sync.py:2861:        drive_id = record["drive_file_id"]
+src/drive/drive_sync.py:2864:            self.current_drive_metadata(
+src/drive/drive_sync.py:2865:                drive_id
+src/drive/drive_sync.py:2888:            drive_db_id
+src/drive/drive_sync.py:2891:        if self.same_drive_state(
+src/drive/drive_sync.py:2901:            drive_db_id,
+src/drive/drive_sync.py:2903:            "Drive version changed",
+src/drive/drive_sync.py:2917:                    "DriveDownloader reported failure"
+src/drive/drive_sync.py:2929:                drive_db_id,
+src/drive/drive_sync.py:2937:            self.update_drive_file_record(
+src/drive/drive_sync.py:2938:                drive_db_id,
+src/drive/drive_sync.py:2946:                drive_db_id,
+src/drive/drive_sync.py:3015:                self.sync_local_to_drive(
+src/drive/drive_sync.py:3059:    # Process Drive record
+src/drive/drive_sync.py:3062:    def process_drive_record(
+src/drive/drive_sync.py:3077:            drive_file_id=record.get(
+src/drive/drive_sync.py:3078:                "drive_file_id"
+src/drive/drive_sync.py:3085:                self.sync_drive_to_local(
+src/drive/drive_sync.py:3135:                "Local → Drive"
+src/drive/drive_sync.py:3137:                == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3138:                else "Drive → Local"
+src/drive/drive_sync.py:3146:            self.connect()
+src/drive/drive_sync.py:3158:            # LOCAL -> DRIVE
+src/drive/drive_sync.py:3163:                == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3171:            # DRIVE -> LOCAL
+src/drive/drive_sync.py:3177:                    self.get_drive_candidates()
+src/drive/drive_sync.py:3210:                # LOCAL -> DRIVE transfer budget.
+src/drive/drive_sync.py:3219:                    == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3294:                    == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3325:                        if self.reconnect_drive():
+src/drive/drive_sync.py:3367:                        self.process_drive_record(
+src/drive/drive_sync.py:3415:            # For LOCAL_TO_DRIVE:
+src/drive/drive_sync.py:3423:                == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3455:                == DIRECTION_LOCAL_TO_DRIVE
+src/drive/drive_sync.py:3621:        DIRECTION_DRIVE_TO_LOCAL,
+src/drive/drive_sync.py:3625:        DIRECTION_DRIVE_TO_LOCAL,
+src/drive/drive_sync.py:3626:        DIRECTION_LOCAL_TO_DRIVE,
+src/drive/drive_sync.py:3637:    sync = DriveSync(
+src/drive/drive_scanner.py:4:Alcalay - Google Drive Scanner
+src/drive/drive_scanner.py:7:Read-only scanner for the Alcalay Google Drive repository.
+src/drive/drive_scanner.py:12:    - Return Google Drive metadata only.
+src/drive/drive_scanner.py:27:from __future__ import annotations
+src/drive/drive_scanner.py:29:from dataclasses import dataclass
+src/drive/drive_scanner.py:30:from typing import Any
+src/drive/drive_scanner.py:32:from src.drive.drive_connection import DriveConnection
+src/drive/drive_scanner.py:33:from src.drive.drive_repository import DriveRepository
+src/drive/drive_scanner.py:40:class DriveItem:
+src/drive/drive_scanner.py:42:    Metadata representation of one Google Drive item.
+src/drive/drive_scanner.py:66:class DriveScanner:
+src/drive/drive_scanner.py:68:    Read-only recursive scanner for Google Drive.
+src/drive/drive_scanner.py:72:    It does not download or modify any Drive content.
+src/drive/drive_scanner.py:95:        connection: DriveConnection,
+src/drive/drive_scanner.py:96:        repository: DriveRepository,
+src/drive/drive_scanner.py:101:            DriveConnection,
+src/drive/drive_scanner.py:104:                "connection חייב להיות מופע של DriveConnection."
+src/drive/drive_scanner.py:109:            DriveRepository,
+src/drive/drive_scanner.py:112:                "repository חייב להיות מופע של DriveRepository."
+src/drive/drive_scanner.py:120:        Ensure that the Google Drive service is connected.
+src/drive/drive_scanner.py:125:                "Google Drive עדיין לא מחובר."
+src/drive/drive_scanner.py:133:        Return direct children of one Google Drive folder.
+src/drive/drive_scanner.py:159:                    spaces="drive",
+src/drive/drive_scanner.py:164:                    supportsAllDrives=True,
+src/drive/drive_scanner.py:165:                    includeItemsFromAllDrives=True,
+src/drive/drive_scanner.py:230:    def _to_drive_item(
+src/drive/drive_scanner.py:234:    ) -> DriveItem:
+src/drive/drive_scanner.py:236:        Convert raw Google Drive metadata into DriveItem.
+src/drive/drive_scanner.py:282:                "Google Drive item ללא file_id."
+src/drive/drive_scanner.py:292:        return DriveItem(
+src/drive/drive_scanner.py:342:    ) -> list[DriveItem]:
+src/drive/drive_scanner.py:344:        Scan a Google Drive folder.
+src/drive/drive_scanner.py:358:        results: list[DriveItem] = []
+src/drive/drive_scanner.py:366:            item = self._to_drive_item(
+src/drive/drive_scanner.py:392:    ) -> list[DriveItem]:
+src/drive/drive_scanner.py:407:    def scan_gmail(
+src/drive/drive_scanner.py:410:    ) -> list[DriveItem]:
+src/drive/drive_scanner.py:412:        Scan the configured Gmail repository folder.
+src/drive/drive_scanner.py:415:        gmail_folder = (
+src/drive/drive_scanner.py:417:            .get_gmail_folder()
+src/drive/drive_scanner.py:421:            gmail_folder.folder_id,
+src/drive/drive_scanner.py:428:    ) -> list[DriveItem]:
+src/drive/drive_scanner.py:446:    ) -> list[DriveItem]:
+src/drive/test_drive_scanner.py:4:Alcalay - Google Drive Scanner Test
+src/drive/test_drive_scanner.py:19:from __future__ import annotations
+src/drive/test_drive_scanner.py:21:import sys
+src/drive/test_drive_scanner.py:22:from pathlib import Path
+src/drive/test_drive_scanner.py:32:from src.drive.drive_connection import DriveConnection
+src/drive/test_drive_scanner.py:33:from src.drive.drive_repository import DriveRepository
+src/drive/test_drive_scanner.py:34:from src.drive.drive_scanner import DriveScanner
+src/drive/test_drive_scanner.py:41:    print("ALCALAY - GOOGLE DRIVE DOCUMENTS SCANNER TEST")
+src/drive/test_drive_scanner.py:47:        print("[1/4] Connecting to Google Drive...")
+src/drive/test_drive_scanner.py:50:        connection = DriveConnection()
+src/drive/test_drive_scanner.py:52:        email = connection.connect()
+src/drive/test_drive_scanner.py:62:        repository = DriveRepository(
+src/drive/test_drive_scanner.py:69:        print("[3/4] Creating Drive scanner...")
+src/drive/test_drive_scanner.py:72:        scanner = DriveScanner(
+src/drive/test_drive_scanner.py:177:        print("RESULT: Drive Documents scan completed.")
+src/gmail/gmail_indexer_mails.py:4:Alcalay - Gmail INDEXER
+src/gmail/gmail_indexer_mails.py:7:Indexes Gmail messages and existing local attachments.
+src/gmail/gmail_indexer_mails.py:11:    Gmail
+src/gmail/gmail_indexer_mails.py:17:    gmail_messages
+src/gmail/gmail_indexer_mails.py:25:gmail_parsed_messages         gmail_attachments
+src/gmail/gmail_indexer_mails.py:28:gmail_search_index         gmail_attachment_search_index
+src/gmail/gmail_indexer_mails.py:33:- This module does NOT connect to Gmail.
+src/gmail/gmail_indexer_mails.py:36:- Existing EML files and existing gmail_attachments are used.
+src/gmail/gmail_indexer_mails.py:38:- Email content remains in gmail_search_index.
+src/gmail/gmail_indexer_mails.py:39:- Attachment content remains in gmail_attachment_search_index.
+src/gmail/gmail_indexer_mails.py:42:from __future__ import annotations
+src/gmail/gmail_indexer_mails.py:44:import argparse
+src/gmail/gmail_indexer_mails.py:45:import csv
+src/gmail/gmail_indexer_mails.py:46:import hashlib
+src/gmail/gmail_indexer_mails.py:47:import html
+src/gmail/gmail_indexer_mails.py:48:import json
+src/gmail/gmail_indexer_mails.py:49:import re
+src/gmail/gmail_indexer_mails.py:50:import sys
+src/gmail/gmail_indexer_mails.py:51:import zipfile
+src/gmail/gmail_indexer_mails.py:52:from datetime import datetime, timezone
+src/gmail/gmail_indexer_mails.py:53:from pathlib import Path
+src/gmail/gmail_indexer_mails.py:54:from typing import Any
+src/gmail/gmail_indexer_mails.py:55:from xml.etree import ElementTree
+src/gmail/gmail_indexer_mails.py:65:from database.connection import DatabaseConnection
+src/gmail/gmail_indexer_mails.py:71:DEFAULT_ACCOUNT = "frank.avner@gmail.com"
+src/gmail/gmail_indexer_mails.py:76:    / "gmail"
+src/gmail/gmail_indexer_mails.py:82:class GmailIndexer:
+src/gmail/gmail_indexer_mails.py:100:        self.gmail_account_id: int | None = None
+src/gmail/gmail_indexer_mails.py:140:        return DatabaseConnection().connect()
+src/gmail/gmail_indexer_mails.py:215:                    FROM gmail_accounts
+src/gmail/gmail_indexer_mails.py:228:                        "Gmail account was not found in PostgreSQL: "
+src/gmail/gmail_indexer_mails.py:232:                self.gmail_account_id = int(
+src/gmail/gmail_indexer_mails.py:237:                    "[DB] Gmail account ID: "
+src/gmail/gmail_indexer_mails.py:239:                        self.gmail_account_id
+src/gmail/gmail_indexer_mails.py:261:                    CREATE TABLE IF NOT EXISTS gmail_search_index (
+src/gmail/gmail_indexer_mails.py:264:                        gmail_message_id BIGINT NOT NULL,
+src/gmail/gmail_indexer_mails.py:266:                        gmail_message_key TEXT NOT NULL,
+src/gmail/gmail_indexer_mails.py:268:                        gmail_account_id BIGINT NOT NULL,
+src/gmail/gmail_indexer_mails.py:318:                        CONSTRAINT uq_gmail_search_index_message
+src/gmail/gmail_indexer_mails.py:319:                            UNIQUE (gmail_message_id)
+src/gmail/gmail_indexer_mails.py:327:                        idx_gmail_search_index_account
+src/gmail/gmail_indexer_mails.py:328:                    ON gmail_search_index (
+src/gmail/gmail_indexer_mails.py:329:                        gmail_account_id
+src/gmail/gmail_indexer_mails.py:337:                        idx_gmail_search_index_date
+src/gmail/gmail_indexer_mails.py:338:                    ON gmail_search_index (
+src/gmail/gmail_indexer_mails.py:347:                        idx_gmail_search_index_message_key
+src/gmail/gmail_indexer_mails.py:348:                    ON gmail_search_index (
+src/gmail/gmail_indexer_mails.py:349:                        gmail_message_key
+src/gmail/gmail_indexer_mails.py:357:                        idx_gmail_search_index_sender
+src/gmail/gmail_indexer_mails.py:358:                    ON gmail_search_index (
+src/gmail/gmail_indexer_mails.py:367:                        idx_gmail_search_index_subject
+src/gmail/gmail_indexer_mails.py:368:                    ON gmail_search_index (
+src/gmail/gmail_indexer_mails.py:377:                        idx_gmail_search_index_search_vector
+src/gmail/gmail_indexer_mails.py:378:                    ON gmail_search_index
+src/gmail/gmail_indexer_mails.py:410:                        gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:414:                        gmail_attachment_id BIGINT NOT NULL,
+src/gmail/gmail_indexer_mails.py:416:                        gmail_message_id BIGINT NOT NULL,
+src/gmail/gmail_indexer_mails.py:418:                        gmail_account_id BIGINT NOT NULL,
+src/gmail/gmail_indexer_mails.py:420:                        gmail_message_key TEXT,
+src/gmail/gmail_indexer_mails.py:449:                            uq_gmail_attachment_search_index
+src/gmail/gmail_indexer_mails.py:451:                                gmail_attachment_id
+src/gmail/gmail_indexer_mails.py:460:                        idx_gmail_attachment_index_message
+src/gmail/gmail_indexer_mails.py:461:                    ON gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:462:                        gmail_message_id
+src/gmail/gmail_indexer_mails.py:470:                        idx_gmail_attachment_index_account
+src/gmail/gmail_indexer_mails.py:471:                    ON gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:472:                        gmail_account_id
+src/gmail/gmail_indexer_mails.py:480:                        idx_gmail_attachment_index_filename
+src/gmail/gmail_indexer_mails.py:481:                    ON gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:490:                        idx_gmail_attachment_index_mime
+src/gmail/gmail_indexer_mails.py:491:                    ON gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:500:                        idx_gmail_attachment_index_hash
+src/gmail/gmail_indexer_mails.py:501:                    ON gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:510:                        idx_gmail_attachment_index_search_vector
+src/gmail/gmail_indexer_mails.py:511:                    ON gmail_attachment_search_index
+src/gmail/gmail_indexer_mails.py:536:        if self.gmail_account_id is None:
+src/gmail/gmail_indexer_mails.py:549:                        gpm.gmail_message_id,
+src/gmail/gmail_indexer_mails.py:550:                        gpm.gmail_message_key,
+src/gmail/gmail_indexer_mails.py:572:                    FROM gmail_parsed_messages gpm
+src/gmail/gmail_indexer_mails.py:573:                    JOIN gmail_messages gm
+src/gmail/gmail_indexer_mails.py:574:                        ON gm.id = gpm.gmail_message_id
+src/gmail/gmail_indexer_mails.py:575:                    WHERE gm.gmail_account_id = %s
+src/gmail/gmail_indexer_mails.py:576:                    ORDER BY gpm.gmail_message_id
+src/gmail/gmail_indexer_mails.py:580:                    self.gmail_account_id
+src/gmail/gmail_indexer_mails.py:623:        gmail_message_id: int,
+src/gmail/gmail_indexer_mails.py:637:                    FROM gmail_search_index
+src/gmail/gmail_indexer_mails.py:638:                    WHERE gmail_message_id = %s
+src/gmail/gmail_indexer_mails.py:642:                        gmail_message_id,
+src/gmail/gmail_indexer_mails.py:669:        gmail_message_id = int(
+src/gmail/gmail_indexer_mails.py:670:            message["gmail_message_id"]
+src/gmail/gmail_indexer_mails.py:675:                gmail_message_id
+src/gmail/gmail_indexer_mails.py:746:                    INSERT INTO gmail_search_index (
+src/gmail/gmail_indexer_mails.py:747:                        gmail_message_id,
+src/gmail/gmail_indexer_mails.py:748:                        gmail_message_key,
+src/gmail/gmail_indexer_mails.py:749:                        gmail_account_id,
+src/gmail/gmail_indexer_mails.py:787:                        gmail_message_id
+src/gmail/gmail_indexer_mails.py:790:                        gmail_message_key =
+src/gmail/gmail_indexer_mails.py:791:                            EXCLUDED.gmail_message_key,
+src/gmail/gmail_indexer_mails.py:793:                        gmail_account_id =
+src/gmail/gmail_indexer_mails.py:794:                            EXCLUDED.gmail_account_id,
+src/gmail/gmail_indexer_mails.py:866:                        gmail_message_id,
+src/gmail/gmail_indexer_mails.py:868:                            "gmail_message_key"
+src/gmail/gmail_indexer_mails.py:870:                        self.gmail_account_id,
+src/gmail/gmail_indexer_mails.py:974:        if self.gmail_account_id is None:
+src/gmail/gmail_indexer_mails.py:987:                        ga.gmail_message_id,
+src/gmail/gmail_indexer_mails.py:998:                    FROM gmail_attachments ga
+src/gmail/gmail_indexer_mails.py:999:                    JOIN gmail_messages gm
+src/gmail/gmail_indexer_mails.py:1000:                        ON gm.id = ga.gmail_message_id
+src/gmail/gmail_indexer_mails.py:1001:                    WHERE gm.gmail_account_id = %s
+src/gmail/gmail_indexer_mails.py:1005:                    self.gmail_account_id
+src/gmail/gmail_indexer_mails.py:1017:                        AND ga.gmail_message_id =
+src/gmail/gmail_indexer_mails.py:1124:        gmail_attachment_id: int,
+src/gmail/gmail_indexer_mails.py:1138:                    FROM gmail_attachment_search_index
+src/gmail/gmail_indexer_mails.py:1139:                    WHERE gmail_attachment_id = %s
+src/gmail/gmail_indexer_mails.py:1143:                        gmail_attachment_id,
+src/gmail/gmail_indexer_mails.py:1876:                "indexed_by": "GmailIndexer",
+src/gmail/gmail_indexer_mails.py:1892:                        gmail_attachment_search_index (
+src/gmail/gmail_indexer_mails.py:1893:                            gmail_attachment_id,
+src/gmail/gmail_indexer_mails.py:1894:                            gmail_message_id,
+src/gmail/gmail_indexer_mails.py:1895:                            gmail_account_id,
+src/gmail/gmail_indexer_mails.py:1896:                            gmail_message_key,
+src/gmail/gmail_indexer_mails.py:1922:                        gmail_attachment_id
+src/gmail/gmail_indexer_mails.py:1925:                        gmail_message_id =
+src/gmail/gmail_indexer_mails.py:1926:                            EXCLUDED.gmail_message_id,
+src/gmail/gmail_indexer_mails.py:1928:                        gmail_account_id =
+src/gmail/gmail_indexer_mails.py:1929:                            EXCLUDED.gmail_account_id,
+src/gmail/gmail_indexer_mails.py:1931:                        gmail_message_key =
+src/gmail/gmail_indexer_mails.py:1932:                            EXCLUDED.gmail_message_key,
+src/gmail/gmail_indexer_mails.py:1976:                            "gmail_message_id"
+src/gmail/gmail_indexer_mails.py:1978:                        self.gmail_account_id,
+src/gmail/gmail_indexer_mails.py:2059:            gmail_message_id = int(
+src/gmail/gmail_indexer_mails.py:2061:                    "gmail_message_id"
+src/gmail/gmail_indexer_mails.py:2066:                gmail_message_id
+src/gmail/gmail_indexer_mails.py:2071:                    "gmail_message_key"
+src/gmail/gmail_indexer_mails.py:2201:            "ALCALAY - GMAIL INDEX SUMMARY"
+src/gmail/gmail_indexer_mails.py:2377:            "ALCALAY - GMAIL INDEX"
+src/gmail/gmail_indexer_mails.py:2454:            "Alcalay Gmail INDEX - "
+src/gmail/gmail_indexer_mails.py:2463:            "Gmail account email. "
+src/gmail/gmail_indexer_mails.py:2473:            "Gmail storage root. "
+src/gmail/gmail_indexer_mails.py:2474:            "Default: storage/gmail"
+src/gmail/gmail_indexer_mails.py:2506:    indexer = GmailIndexer(
+src/gmail/gmail_indexer_mails.py:2542:            "GMAIL INDEX FAILED",
+src/gmail/gmail_search_window.py:4:Alcalay - Gmail Search Window
+src/gmail/gmail_search_window.py:6:Direct Gmail search UI.
+src/gmail/gmail_search_window.py:8:This version searches Gmail directly through the Gmail API.
+src/gmail/gmail_search_window.py:12:    - Gmail account
+src/gmail/gmail_search_window.py:13:    - Gmail labels
+src/gmail/gmail_search_window.py:26:from __future__ import annotations
+src/gmail/gmail_search_window.py:28:import sys
+src/gmail/gmail_search_window.py:29:from datetime import datetime
+src/gmail/gmail_search_window.py:30:from pathlib import Path
+src/gmail/gmail_search_window.py:31:from typing import Optional
+src/gmail/gmail_search_window.py:39:# ./.venv/bin/python src/gmail/gmail_search_window.py
+src/gmail/gmail_search_window.py:42:# ModuleNotFoundError: No module named 'gmail'
+src/gmail/gmail_search_window.py:54:from PySide6.QtCore import Qt
+src/gmail/gmail_search_window.py:56:from PySide6.QtWidgets import (
+src/gmail/gmail_search_window.py:68:    QPushButton,
+src/gmail/gmail_search_window.py:77:# ALCALAY GMAIL MODULES
+src/gmail/gmail_search_window.py:80:from gmail.gmail_connection import GmailConnection
+src/gmail/gmail_search_window.py:81:from gmail.gmail_accounts import GmailAccountsManager
+src/gmail/gmail_search_window.py:84:class GmailSearchWindow(QMainWindow):
+src/gmail/gmail_search_window.py:86:    Direct Gmail search window.
+src/gmail/gmail_search_window.py:94:        self.setWindowTitle("Alcalay - חיפוש Gmail")
+src/gmail/gmail_search_window.py:97:        self.accounts_manager = GmailAccountsManager()
+src/gmail/gmail_search_window.py:99:        self.connection: Optional[GmailConnection] = None
+src/gmail/gmail_search_window.py:199:            QPushButton {
+src/gmail/gmail_search_window.py:207:            QPushButton:hover {
+src/gmail/gmail_search_window.py:211:            QPushButton:pressed {
+src/gmail/gmail_search_window.py:215:            QPushButton:disabled {
+src/gmail/gmail_search_window.py:220:            QPushButton#primaryButton {
+src/gmail/gmail_search_window.py:227:            QPushButton#primaryButton:hover {
+src/gmail/gmail_search_window.py:273:        title = QLabel("חיפוש Gmail")
+src/gmail/gmail_search_window.py:277:            "חיפוש ישיר מול Gmail. "
+src/gmail/gmail_search_window.py:299:        account_label = QLabel("חשבון Gmail:")
+src/gmail/gmail_search_window.py:304:        self.account_combo.currentIndexChanged.connect(
+src/gmail/gmail_search_window.py:451:        self.search_button = QPushButton("🔍 חיפוש")
+src/gmail/gmail_search_window.py:453:        self.search_button.clicked.connect(
+src/gmail/gmail_search_window.py:457:        self.clear_button = QPushButton("נקה")
+src/gmail/gmail_search_window.py:458:        self.clear_button.clicked.connect(
+src/gmail/gmail_search_window.py:469:            "שאילתת Gmail שנבנתה:"
+src/gmail/gmail_search_window.py:556:        self.results_table.doubleClicked.connect(
+src/gmail/gmail_search_window.py:624:                "לא נמצאו חשבונות Gmail מוגדרים."
+src/gmail/gmail_search_window.py:639:            self.connection = GmailConnection(
+src/gmail/gmail_search_window.py:644:                self.connection.connect(email)
+src/gmail/gmail_search_window.py:654:                f"מחובר ל־Gmail: {connected_email}"
+src/gmail/gmail_search_window.py:662:                f"שגיאה בחיבור ל־Gmail: {exc}"
+src/gmail/gmail_search_window.py:667:                "שגיאת Gmail",
+src/gmail/gmail_search_window.py:719:                gmail_label = labels_by_id.get(
+src/gmail/gmail_search_window.py:723:                if not gmail_label:
+src/gmail/gmail_search_window.py:726:                label_name = gmail_label.get(
+src/gmail/gmail_search_window.py:932:                "אין חיבור פעיל לחשבון Gmail.",
+src/gmail/gmail_search_window.py:944:                "שירות Gmail אינו זמין.",
+src/gmail/gmail_search_window.py:961:            "מבצע חיפוש ב־Gmail..."
+src/gmail/gmail_search_window.py:993:                f"החיפוש ב־Gmail נכשל:\n\n{exc}",
+src/gmail/gmail_search_window.py:1525:    window = GmailSearchWindow()
+src/gmail/gmail_search_window.py:1529:        app.exec()
+src/gmail/gmail_window.py:3:import sys
+src/gmail/gmail_window.py:4:from datetime import datetime
+src/gmail/gmail_window.py:5:from pathlib import Path
+src/gmail/gmail_window.py:7:from PySide6.QtCore import Qt
+src/gmail/gmail_window.py:8:from PySide6.QtWidgets import (
+src/gmail/gmail_window.py:16:    QPushButton,
+src/gmail/gmail_window.py:24:    from gmail.gmail_connection import GmailConnection
+src/gmail/gmail_window.py:25:    from gmail.gmail_accounts import GmailAccountsManager
+src/gmail/gmail_window.py:27:    from src.gmail.gmail_connection import GmailConnection
+src/gmail/gmail_window.py:28:    from src.gmail.gmail_accounts import GmailAccountsManager
+src/gmail/gmail_window.py:31:    from database.connection import DatabaseConnection
+src/gmail/gmail_window.py:33:    from src.database.connection import DatabaseConnection
+src/gmail/gmail_window.py:39:class GmailWindow(QMainWindow):
+src/gmail/gmail_window.py:44:        self.accounts_manager = GmailAccountsManager()
+src/gmail/gmail_window.py:45:        self.gmail_connection = None
+src/gmail/gmail_window.py:50:        self.setWindowTitle("Alcalay - ניהול Gmail")
+src/gmail/gmail_window.py:71:        title = QLabel("ניהול Gmail")
+src/gmail/gmail_window.py:78:            "ניהול חשבונות Gmail, תגיות והבחירה לסנכרון"
+src/gmail/gmail_window.py:88:        account_group = QGroupBox("חשבונות Gmail")
+src/gmail/gmail_window.py:93:        self.add_account_button = QPushButton(
+src/gmail/gmail_window.py:94:            "הוסף חשבון Gmail"
+src/gmail/gmail_window.py:96:        self.add_account_button.clicked.connect(
+src/gmail/gmail_window.py:100:        self.remove_account_button = QPushButton(
+src/gmail/gmail_window.py:103:        self.remove_account_button.clicked.connect(
+src/gmail/gmail_window.py:107:        self.refresh_account_button = QPushButton(
+src/gmail/gmail_window.py:110:        self.refresh_account_button.clicked.connect(
+src/gmail/gmail_window.py:129:        self.accounts_list.itemSelectionChanged.connect(
+src/gmail/gmail_window.py:174:        self.linked_labels_list.itemSelectionChanged.connect(
+src/gmail/gmail_window.py:184:        self.remove_label_button = QPushButton(
+src/gmail/gmail_window.py:187:        self.remove_label_button.clicked.connect(
+src/gmail/gmail_window.py:201:            "תגיות זמינות ב-Gmail"
+src/gmail/gmail_window.py:217:        self.label_search.textChanged.connect(
+src/gmail/gmail_window.py:233:        self.available_labels_list.itemDoubleClicked.connect(
+src/gmail/gmail_window.py:269:        self.refresh_labels_button = QPushButton(
+src/gmail/gmail_window.py:270:            "רענן תגיות Gmail"
+src/gmail/gmail_window.py:272:        self.refresh_labels_button.clicked.connect(
+src/gmail/gmail_window.py:273:            self._refresh_gmail_labels
+src/gmail/gmail_window.py:276:        self.refresh_display_button = QPushButton(
+src/gmail/gmail_window.py:279:        self.refresh_display_button.clicked.connect(
+src/gmail/gmail_window.py:347:            QPushButton {
+src/gmail/gmail_window.py:356:            QPushButton:hover {
+src/gmail/gmail_window.py:388:                    "אין חשבונות Gmail מקושרים"
+src/gmail/gmail_window.py:456:                "חשבונות Gmail נטענו"
+src/gmail/gmail_window.py:468:                f"לא ניתן לטעון את חשבונות Gmail:\n\n{exc}"
+src/gmail/gmail_window.py:502:            connection = GmailConnection()
+src/gmail/gmail_window.py:504:            result = connection.connect()
+src/gmail/gmail_window.py:508:                    "חיבור Gmail נכשל."
+src/gmail/gmail_window.py:535:                    "Gmail",
+src/gmail/gmail_window.py:569:            self._refresh_gmail_labels()
+src/gmail/gmail_window.py:575:                connection = GmailConnection(
+src/gmail/gmail_window.py:579:                result = connection.connect()
+src/gmail/gmail_window.py:583:                        "חיבור Gmail נכשל."
+src/gmail/gmail_window.py:594:                        "לא ניתן לזהות את כתובת Gmail."
+src/gmail/gmail_window.py:607:                    "שגיאה בחיבור Gmail",
+src/gmail/gmail_window.py:615:                "שגיאה בחיבור Gmail",
+src/gmail/gmail_window.py:624:                "Gmail",
+src/gmail/gmail_window.py:633:                "האם להסיר את חשבון Gmail?\n\n"
+src/gmail/gmail_window.py:697:        return DatabaseConnection().connect()
+src/gmail/gmail_window.py:699:    def _get_postgres_gmail_account_id(self):
+src/gmail/gmail_window.py:703:                "לא נבחר חשבון Gmail."
+src/gmail/gmail_window.py:715:                    FROM gmail_accounts
+src/gmail/gmail_window.py:729:                        "חשבון Gmail אינו קיים ב-PostgreSQL:\n"
+src/gmail/gmail_window.py:741:        gmail_account_id = (
+src/gmail/gmail_window.py:742:            self._get_postgres_gmail_account_id()
+src/gmail/gmail_window.py:763:                    FROM gmail_labels
+src/gmail/gmail_window.py:764:                    WHERE gmail_account_id = %s
+src/gmail/gmail_window.py:768:                        gmail_account_id,
+src/gmail/gmail_window.py:809:    def _sync_gmail_labels_to_postgres(
+src/gmail/gmail_window.py:814:        gmail_account_id = (
+src/gmail/gmail_window.py:815:            self._get_postgres_gmail_account_id()
+src/gmail/gmail_window.py:827:                for gmail_label in all_labels:
+src/gmail/gmail_window.py:829:                    label_id = gmail_label.get(
+src/gmail/gmail_window.py:833:                    label_name = gmail_label.get(
+src/gmail/gmail_window.py:837:                    label_type = gmail_label.get(
+src/gmail/gmail_window.py:850:                        FROM gmail_labels
+src/gmail/gmail_window.py:851:                        WHERE gmail_account_id = %s
+src/gmail/gmail_window.py:856:                            gmail_account_id,
+src/gmail/gmail_window.py:867:                            UPDATE gmail_labels
+src/gmail/gmail_window.py:872:                            WHERE gmail_account_id = %s
+src/gmail/gmail_window.py:878:                                gmail_account_id,
+src/gmail/gmail_window.py:889:                            INSERT INTO gmail_labels (
+src/gmail/gmail_window.py:890:                                gmail_account_id,
+src/gmail/gmail_window.py:907:                                gmail_account_id,
+src/gmail/gmail_window.py:937:        gmail_account_id = (
+src/gmail/gmail_window.py:938:            self._get_postgres_gmail_account_id()
+src/gmail/gmail_window.py:949:                    UPDATE gmail_labels
+src/gmail/gmail_window.py:959:                    WHERE gmail_account_id = %s
+src/gmail/gmail_window.py:966:                        gmail_account_id,
+src/gmail/gmail_window.py:975:                        INSERT INTO gmail_labels (
+src/gmail/gmail_window.py:976:                            gmail_account_id,
+src/gmail/gmail_window.py:993:                            gmail_account_id,
+src/gmail/gmail_window.py:1171:                "GmailAccountsManager אינו מספק save()."
+src/gmail/gmail_window.py:1310:            connection = GmailConnection(
+src/gmail/gmail_window.py:1314:            result = connection.connect(
+src/gmail/gmail_window.py:1320:                    "לא ניתן להתחבר ל-Gmail."
+src/gmail/gmail_window.py:1323:            self.gmail_connection = connection
+src/gmail/gmail_window.py:1325:            all_labels = self._get_all_gmail_labels(
+src/gmail/gmail_window.py:1330:            # כל Label שקיים ב-Gmail חייב להיות גם ב-PostgreSQL.
+src/gmail/gmail_window.py:1334:            self._sync_gmail_labels_to_postgres(
+src/gmail/gmail_window.py:1416:                f"שגיאה בטעינת תגיות Gmail: {exc}"
+src/gmail/gmail_window.py:1420:    # Gmail API
+src/gmail/gmail_window.py:1423:    def _get_all_gmail_labels(self, connection):
+src/gmail/gmail_window.py:1433:                "שירות Gmail אינו זמין."
+src/gmail/gmail_window.py:1670:    # Refresh Gmail Labels
+src/gmail/gmail_window.py:1673:    def _refresh_gmail_labels(self):
+src/gmail/gmail_window.py:1678:                "Gmail",
+src/gmail/gmail_window.py:1679:                "יש לבחור חשבון Gmail."
+src/gmail/gmail_window.py:1686:                "מתחבר ל-Gmail ומרענן את רשימת התגיות..."
+src/gmail/gmail_window.py:1691:            connection = GmailConnection(
+src/gmail/gmail_window.py:1695:            result = connection.connect(
+src/gmail/gmail_window.py:1701:                    "חיבור Gmail נכשל."
+src/gmail/gmail_window.py:1704:            self.gmail_connection = connection
+src/gmail/gmail_window.py:1708:            # משיכת כל התגיות העדכניות מ-Gmail.
+src/gmail/gmail_window.py:1711:            all_labels = self._get_all_gmail_labels(
+src/gmail/gmail_window.py:1718:                    "לא נמצאו תגיות ב-Gmail"
+src/gmail/gmail_window.py:1734:                self._sync_gmail_labels_to_postgres(
+src/gmail/gmail_window.py:1766:                    f"נמצאו {len(all_labels)} תגיות ב-Gmail | "
+src/gmail/gmail_window.py:1780:                    "לא ניתן לרענן את תגיות Gmail:\n\n"
+src/gmail/gmail_window.py:1786:                "שגיאה ברענון תגיות Gmail"
+src/gmail/gmail_window.py:1876:            if self.gmail_connection is not None:
+src/gmail/gmail_window.py:1879:                    self.gmail_connection,
+src/gmail/gmail_window.py:1899:    window = GmailWindow()
+src/gmail/gmail_window.py:1903:        app.exec()
+src/gmail/gmail_indexer.py:4:Alcalay - Gmail INDEX
+src/gmail/gmail_indexer.py:6:Indexes already copied and parsed Gmail messages.
+src/gmail/gmail_indexer.py:10:    Gmail
+src/gmail/gmail_indexer.py:16:    storage/gmail/<account>/messages/<message_key>/message.eml
+src/gmail/gmail_indexer.py:21:      +----> gmail_parsed_messages
+src/gmail/gmail_indexer.py:23:      +----> gmail_attachments
+src/gmail/gmail_indexer.py:28:      +----> gmail_search_index
+src/gmail/gmail_indexer.py:30:      +----> gmail_attachment_search_index
+src/gmail/gmail_indexer.py:34:- This module does NOT connect to Gmail.
+src/gmail/gmail_indexer.py:35:- This module does NOT download messages from Gmail.
+src/gmail/gmail_indexer.py:37:- Email content is indexed from gmail_parsed_messages.
+src/gmail/gmail_indexer.py:38:- Attachment content is indexed from gmail_attachments/local files.
+src/gmail/gmail_indexer.py:42:from __future__ import annotations
+src/gmail/gmail_indexer.py:44:import argparse
+src/gmail/gmail_indexer.py:45:import csv
+src/gmail/gmail_indexer.py:46:import hashlib
+src/gmail/gmail_indexer.py:47:import html
+src/gmail/gmail_indexer.py:48:import json
+src/gmail/gmail_indexer.py:49:import re
+src/gmail/gmail_indexer.py:50:import sys
+src/gmail/gmail_indexer.py:52:from datetime import datetime, timezone
+src/gmail/gmail_indexer.py:53:from pathlib import Path
+src/gmail/gmail_indexer.py:54:from typing import Any, Optional
+src/gmail/gmail_indexer.py:63:DEFAULT_STORAGE_ROOT = PROJECT_ROOT / "storage" / "gmail"
+src/gmail/gmail_indexer.py:64:DEFAULT_ACCOUNT = "frank.avner@gmail.com"
+src/gmail/gmail_indexer.py:70:class GmailIndexer:
+src/gmail/gmail_indexer.py:72:    Gmail email and attachment indexer.
+src/gmail/gmail_indexer.py:96:        self.gmail_account_id = None
+src/gmail/gmail_indexer.py:171:        from database.connection import DatabaseConnection
+src/gmail/gmail_indexer.py:173:        connection = DatabaseConnection()
+src/gmail/gmail_indexer.py:174:        self.db = connection.connect()
+src/gmail/gmail_indexer.py:180:                FROM gmail_accounts
+src/gmail/gmail_indexer.py:191:                f"Gmail account not found in PostgreSQL: "
+src/gmail/gmail_indexer.py:195:        self.gmail_account_id = row[0]
+src/gmail/gmail_indexer.py:198:            f"[DB] Gmail account ID: {self.gmail_account_id}"
+src/gmail/gmail_indexer.py:207:                CREATE TABLE IF NOT EXISTS gmail_search_index (
+src/gmail/gmail_indexer.py:209:                    gmail_message_id BIGINT NOT NULL,
+src/gmail/gmail_indexer.py:210:                    gmail_message_key TEXT NOT NULL,
+src/gmail/gmail_indexer.py:211:                    gmail_account_id BIGINT NOT NULL,
+src/gmail/gmail_indexer.py:242:                ux_gmail_search_index_message
+src/gmail/gmail_indexer.py:243:                ON gmail_search_index (gmail_message_id)
+src/gmail/gmail_indexer.py:250:                ix_gmail_search_index_account
+src/gmail/gmail_indexer.py:251:                ON gmail_search_index (gmail_account_id)
+src/gmail/gmail_indexer.py:258:                ix_gmail_search_index_date
+src/gmail/gmail_indexer.py:259:                ON gmail_search_index (date_sent)
+src/gmail/gmail_indexer.py:266:                ix_gmail_search_index_message_key
+src/gmail/gmail_indexer.py:267:                ON gmail_search_index (gmail_message_key)
+src/gmail/gmail_indexer.py:274:                ix_gmail_search_index_sender
+src/gmail/gmail_indexer.py:275:                ON gmail_search_index (sender_email)
+src/gmail/gmail_indexer.py:282:                ix_gmail_search_index_subject
+src/gmail/gmail_indexer.py:283:                ON gmail_search_index (subject)
+src/gmail/gmail_indexer.py:290:                ix_gmail_search_index_search_vector
+src/gmail/gmail_indexer.py:291:                ON gmail_search_index
+src/gmail/gmail_indexer.py:304:                CREATE TABLE IF NOT EXISTS gmail_attachment_search_index (
+src/gmail/gmail_indexer.py:306:                    gmail_attachment_id BIGINT NOT NULL,
+src/gmail/gmail_indexer.py:307:                    gmail_message_id BIGINT NOT NULL,
+src/gmail/gmail_indexer.py:308:                    gmail_message_key TEXT,
+src/gmail/gmail_indexer.py:309:                    gmail_account_id BIGINT NOT NULL,
+src/gmail/gmail_indexer.py:335:                ux_gmail_attachment_search_index_attachment
+src/gmail/gmail_indexer.py:336:                ON gmail_attachment_search_index (gmail_attachment_id)
+src/gmail/gmail_indexer.py:343:                ix_gmail_attachment_search_index_account
+src/gmail/gmail_indexer.py:344:                ON gmail_attachment_search_index (gmail_account_id)
+src/gmail/gmail_indexer.py:351:                ix_gmail_attachment_search_index_message
+src/gmail/gmail_indexer.py:352:                ON gmail_attachment_search_index (gmail_message_id)
+src/gmail/gmail_indexer.py:359:                ix_gmail_attachment_search_index_hash
+src/gmail/gmail_indexer.py:360:                ON gmail_attachment_search_index (content_hash)
+src/gmail/gmail_indexer.py:367:                ix_gmail_attachment_search_index_filename
+src/gmail/gmail_indexer.py:368:                ON gmail_attachment_search_index (file_name)
+src/gmail/gmail_indexer.py:375:                ix_gmail_attachment_search_index_search_vector
+src/gmail/gmail_indexer.py:376:                ON gmail_attachment_search_index
+src/gmail/gmail_indexer.py:393:                gpm.gmail_message_id,
+src/gmail/gmail_indexer.py:394:                gpm.gmail_message_key,
+src/gmail/gmail_indexer.py:423:                gm.sender AS gmail_sender,
+src/gmail/gmail_indexer.py:424:                gm.recipients AS gmail_recipients,
+src/gmail/gmail_indexer.py:425:                gm.cc AS gmail_cc,
+src/gmail/gmail_indexer.py:426:                gm.bcc AS gmail_bcc,
+src/gmail/gmail_indexer.py:428:            FROM gmail_parsed_messages gpm
+src/gmail/gmail_indexer.py:429:            INNER JOIN gmail_messages gm
+src/gmail/gmail_indexer.py:430:                ON gm.id = gpm.gmail_message_id
+src/gmail/gmail_indexer.py:431:            WHERE gm.gmail_account_id = %s
+src/gmail/gmail_indexer.py:436:            self.gmail_account_id
+src/gmail/gmail_indexer.py:473:        gmail_message_id: int,
+src/gmail/gmail_indexer.py:483:                FROM gmail_search_index
+src/gmail/gmail_indexer.py:484:                WHERE gmail_message_id = %s
+src/gmail/gmail_indexer.py:487:                (gmail_message_id,),
+src/gmail/gmail_indexer.py:546:        gmail_message_id = message["gmail_message_id"]
+src/gmail/gmail_indexer.py:549:            gmail_message_id
+src/gmail/gmail_indexer.py:576:        metadata["indexed_by"] = "gmail_indexer"
+src/gmail/gmail_indexer.py:628:        gmail_message_key = (
+src/gmail/gmail_indexer.py:629:            message.get("gmail_message_key")
+src/gmail/gmail_indexer.py:643:            gmail_message_id,
+src/gmail/gmail_indexer.py:644:            gmail_message_key,
+src/gmail/gmail_indexer.py:645:            self.gmail_account_id,
+src/gmail/gmail_indexer.py:674:                INSERT INTO gmail_search_index (
+src/gmail/gmail_indexer.py:675:                    gmail_message_id,
+src/gmail/gmail_indexer.py:676:                    gmail_message_key,
+src/gmail/gmail_indexer.py:677:                    gmail_account_id,
+src/gmail/gmail_indexer.py:733:                ON CONFLICT (gmail_message_id)
+src/gmail/gmail_indexer.py:735:                    gmail_message_key = EXCLUDED.gmail_message_key,
+src/gmail/gmail_indexer.py:736:                    gmail_account_id = EXCLUDED.gmail_account_id,
+src/gmail/gmail_indexer.py:778:            message.get("gmail_message_key")
+src/gmail/gmail_indexer.py:840:                ga.gmail_message_id,
+src/gmail/gmail_indexer.py:849:                gm.gmail_account_id,
+src/gmail/gmail_indexer.py:852:            FROM gmail_attachments ga
+src/gmail/gmail_indexer.py:853:            INNER JOIN gmail_messages gm
+src/gmail/gmail_indexer.py:854:                ON gm.id = ga.gmail_message_id
+src/gmail/gmail_indexer.py:855:            WHERE gm.gmail_account_id = %s
+src/gmail/gmail_indexer.py:862:                (self.gmail_account_id,),
+src/gmail/gmail_indexer.py:1424:                FROM gmail_attachment_search_index
+src/gmail/gmail_indexer.py:1425:                WHERE gmail_attachment_id = %s
+src/gmail/gmail_indexer.py:1562:            "gmail_indexer"
+src/gmail/gmail_indexer.py:1589:                "gmail_message_id"
+src/gmail/gmail_indexer.py:1594:            self.gmail_account_id,
+src/gmail/gmail_indexer.py:1630:                INSERT INTO gmail_attachment_search_index (
+src/gmail/gmail_indexer.py:1631:                    gmail_attachment_id,
+src/gmail/gmail_indexer.py:1632:                    gmail_message_id,
+src/gmail/gmail_indexer.py:1633:                    gmail_message_key,
+src/gmail/gmail_indexer.py:1634:                    gmail_account_id,
+src/gmail/gmail_indexer.py:1681:                ON CONFLICT (gmail_attachment_id)
+src/gmail/gmail_indexer.py:1683:                    gmail_message_id = EXCLUDED.gmail_message_id,
+src/gmail/gmail_indexer.py:1684:                    gmail_message_key = EXCLUDED.gmail_message_key,
+src/gmail/gmail_indexer.py:1685:                    gmail_account_id = EXCLUDED.gmail_account_id,
+src/gmail/gmail_indexer.py:1791:        print("ALCALAY - GMAIL INDEX")
+src/gmail/gmail_indexer.py:1881:        print("ALCALAY - GMAIL INDEX SUMMARY")
+src/gmail/gmail_indexer.py:1979:            "Alcalay Gmail email and attachment indexer"
+src/gmail/gmail_indexer.py:1987:            "Gmail account email "
+src/gmail/gmail_indexer.py:1996:            "Gmail storage root "
+src/gmail/gmail_indexer.py:2032:    indexer = GmailIndexer(
+src/gmail/gmail_connection.py:4:Alcalay - Gmail Connection
+src/gmail/gmail_connection.py:7:Gmail OAuth connection module.
+src/gmail/gmail_connection.py:10:    - Connecting to a specific Gmail account
+src/gmail/gmail_connection.py:12:    - Reading the connected Gmail account address
+src/gmail/gmail_connection.py:13:    - Providing the authenticated Gmail API service
+src/gmail/gmail_connection.py:16:    - Gmail search
+src/gmail/gmail_connection.py:17:    - Gmail labels management
+src/gmail/gmail_connection.py:22:Each Gmail account has its own OAuth token.
+src/gmail/gmail_connection.py:25:from __future__ import annotations
+src/gmail/gmail_connection.py:27:from pathlib import Path
+src/gmail/gmail_connection.py:29:from google_auth_oauthlib.flow import InstalledAppFlow
+src/gmail/gmail_connection.py:30:from google.oauth2.credentials import Credentials
+src/gmail/gmail_connection.py:31:from google.auth.transport.requests import Request
+src/gmail/gmail_connection.py:32:from googleapiclient.discovery import build
+src/gmail/gmail_connection.py:45:# │   └── gmail/
+src/gmail/gmail_connection.py:46:# │       └── gmail_connection.py
+src/gmail/gmail_connection.py:48:#     └── gmail/
+src/gmail/gmail_connection.py:51:#             ├── frank.avner@gmail.com.json
+src/gmail/gmail_connection.py:52:#             └── another@gmail.com.json
+src/gmail/gmail_connection.py:57:GMAIL_DIR = PROJECT_ROOT / "config" / "gmail"
+src/gmail/gmail_connection.py:59:CREDENTIALS_FILE = GMAIL_DIR / "credentials.json"
+src/gmail/gmail_connection.py:61:TOKENS_DIR = GMAIL_DIR / "tokens"
+src/gmail/gmail_connection.py:65:# Gmail OAuth scope
+src/gmail/gmail_connection.py:69:    "https://www.googleapis.com/auth/gmail.readonly"
+src/gmail/gmail_connection.py:79:    Normalize a Gmail address for internal use.
+src/gmail/gmail_connection.py:87:    Return the OAuth token file for a specific Gmail account.
+src/gmail/gmail_connection.py:90:        frank.avner@gmail.com
+src/gmail/gmail_connection.py:92:        config/gmail/tokens/frank.avner@gmail.com.json
+src/gmail/gmail_connection.py:101:# Gmail Connection
+src/gmail/gmail_connection.py:104:class GmailConnection:
+src/gmail/gmail_connection.py:106:    Handles authentication and connection to one Gmail account.
+src/gmail/gmail_connection.py:108:    One GmailConnection instance represents one currently connected
+src/gmail/gmail_connection.py:109:    Gmail account.
+src/gmail/gmail_connection.py:130:        Connect to a specific Gmail account.
+src/gmail/gmail_connection.py:134:                Optional Gmail address.
+src/gmail/gmail_connection.py:143:            The connected Gmail account email address.
+src/gmail/gmail_connection.py:150:                If authentication or Gmail connection fails.
+src/gmail/gmail_connection.py:174:        GMAIL_DIR.mkdir(
+src/gmail/gmail_connection.py:254:        # Build Gmail API service
+src/gmail/gmail_connection.py:260:            "gmail",
+src/gmail/gmail_connection.py:289:                "החיבור ל-Gmail הצליח, "
+src/gmail/gmail_connection.py:305:        # Save token under the actual Gmail account.
+src/gmail/gmail_connection.py:330:        Return True if a Gmail service is currently connected.
+src/gmail/gmail_connection.py:341:        Return the currently connected Gmail address.
+src/gmail/gmail_connection.py:347:    # Gmail API service
+src/gmail/gmail_connection.py:352:        Return the authenticated Gmail API service.
+src/gmail/gmail_connection.py:356:                If there is currently no Gmail connection.
+src/gmail/gmail_connection.py:362:                "אין חיבור פעיל ל-Gmail."
+src/gmail/gmail_connection.py:373:        Disconnect the current Gmail service from the application.
+src/gmail/gmail_connection.py:391:    print("Alcalay - Gmail Connection Test")
+src/gmail/gmail_connection.py:405:    connection = GmailConnection()
+src/gmail/gmail_connection.py:409:        print("מתחבר ל-Gmail...")
+src/gmail/gmail_connection.py:412:        email = connection.connect()
+src/gmail/gmail_connection.py:419:        print(f"חשבון Gmail: {email}")
+src/gmail/gmail_connection.py:429:        print("Gmail API service: OK")
+src/gmail/gmail_parser.py:1:from __future__ import annotations
+src/gmail/gmail_parser.py:3:import hashlib
+src/gmail/gmail_parser.py:4:import html
+src/gmail/gmail_parser.py:5:import json
+src/gmail/gmail_parser.py:6:import re
+src/gmail/gmail_parser.py:7:import sys
+src/gmail/gmail_parser.py:8:from datetime import datetime, timezone
+src/gmail/gmail_parser.py:9:from email import policy
+src/gmail/gmail_parser.py:10:from email.header import decode_header, make_header
+src/gmail/gmail_parser.py:11:from email.parser import BytesParser
+src/gmail/gmail_parser.py:12:from email.utils import getaddresses, parsedate_to_datetime
+src/gmail/gmail_parser.py:13:from pathlib import Path
+src/gmail/gmail_parser.py:14:from typing import Any
+src/gmail/gmail_parser.py:23:from database.connection import DatabaseConnection
+src/gmail/gmail_parser.py:29:    / "gmail"
+src/gmail/gmail_parser.py:37:class GmailParser:
+src/gmail/gmail_parser.py:62:        self.gmail_account_id = None
+src/gmail/gmail_parser.py:90:        return DatabaseConnection().connect()
+src/gmail/gmail_parser.py:146:                    FROM gmail_accounts
+src/gmail/gmail_parser.py:159:                        "Gmail account was not found in PostgreSQL: "
+src/gmail/gmail_parser.py:163:                self.gmail_account_id = row[0]
+src/gmail/gmail_parser.py:179:                    CREATE TABLE IF NOT EXISTS gmail_parsed_messages (
+src/gmail/gmail_parser.py:182:                        gmail_message_id BIGINT NOT NULL,
+src/gmail/gmail_parser.py:184:                        gmail_message_key TEXT NOT NULL,
+src/gmail/gmail_parser.py:240:                        CONSTRAINT uq_gmail_parsed_messages_message
+src/gmail/gmail_parser.py:241:                            UNIQUE (gmail_message_id)
+src/gmail/gmail_parser.py:249:                    idx_gmail_parsed_messages_sender
+src/gmail/gmail_parser.py:250:                    ON gmail_parsed_messages(sender_email)
+src/gmail/gmail_parser.py:257:                    idx_gmail_parsed_messages_date_sent
+src/gmail/gmail_parser.py:258:                    ON gmail_parsed_messages(date_sent)
+src/gmail/gmail_parser.py:265:                    idx_gmail_parsed_messages_subject
+src/gmail/gmail_parser.py:266:                    ON gmail_parsed_messages(subject)
+src/gmail/gmail_parser.py:273:                    idx_gmail_parsed_messages_mime_id
+src/gmail/gmail_parser.py:274:                    ON gmail_parsed_messages(mime_message_id)
+src/gmail/gmail_parser.py:281:                    idx_gmail_parsed_messages_search_text
+src/gmail/gmail_parser.py:282:                    ON gmail_parsed_messages
+src/gmail/gmail_parser.py:1122:    def extract_gmail_message_id_from_path(
+src/gmail/gmail_parser.py:1131:        gmail_message_key: str,
+src/gmail/gmail_parser.py:1139:                if self.gmail_account_id is not None:
+src/gmail/gmail_parser.py:1145:                            gmail_account_id,
+src/gmail/gmail_parser.py:1150:                        FROM gmail_messages
+src/gmail/gmail_parser.py:1151:                        WHERE gmail_account_id = %s
+src/gmail/gmail_parser.py:1156:                            self.gmail_account_id,
+src/gmail/gmail_parser.py:1157:                            gmail_message_key,
+src/gmail/gmail_parser.py:1167:                            gmail_account_id,
+src/gmail/gmail_parser.py:1172:                        FROM gmail_messages
+src/gmail/gmail_parser.py:1178:                            gmail_message_key,
+src/gmail/gmail_parser.py:1189:                    "gmail_account_id": row[1],
+src/gmail/gmail_parser.py:1205:        gmail_message_db_id: int,
+src/gmail/gmail_parser.py:1217:                    FROM gmail_parsed_messages
+src/gmail/gmail_parser.py:1218:                    WHERE gmail_message_id = %s
+src/gmail/gmail_parser.py:1222:                        gmail_message_db_id,
+src/gmail/gmail_parser.py:1428:                    INSERT INTO gmail_attachments (
+src/gmail/gmail_parser.py:1429:                        gmail_message_id,
+src/gmail/gmail_parser.py:1444:                        gmail_message_id,
+src/gmail/gmail_parser.py:1508:        gmail_message_key = str(
+src/gmail/gmail_parser.py:1554:            "source": "gmail",
+src/gmail/gmail_parser.py:1555:            "parser": "gmail_parser.py",
+src/gmail/gmail_parser.py:1557:            "gmail_message_key": gmail_message_key,
+src/gmail/gmail_parser.py:1558:            "gmail_message_db_id": message_db_id,
+src/gmail/gmail_parser.py:1591:                    INSERT INTO gmail_parsed_messages (
+src/gmail/gmail_parser.py:1592:                        gmail_message_id,
+src/gmail/gmail_parser.py:1593:                        gmail_message_key,
+src/gmail/gmail_parser.py:1633:                        gmail_message_id
+src/gmail/gmail_parser.py:1636:                        gmail_message_key =
+src/gmail/gmail_parser.py:1637:                            EXCLUDED.gmail_message_key,
+src/gmail/gmail_parser.py:1695:                        gmail_message_key,
+src/gmail/gmail_parser.py:1810:                    UPDATE gmail_messages
+src/gmail/gmail_parser.py:1937:                    FROM gmail_messages
+src/gmail/gmail_parser.py:1999:                    UPDATE gmail_messages
+src/gmail/gmail_parser.py:2031:        gmail_message_key = (
+src/gmail/gmail_parser.py:2032:            self.extract_gmail_message_id_from_path(
+src/gmail/gmail_parser.py:2040:            + gmail_message_key
+src/gmail/gmail_parser.py:2045:                gmail_message_key
+src/gmail/gmail_parser.py:2057:                "but was not found in gmail_messages: "
+src/gmail/gmail_parser.py:2058:                + gmail_message_key
+src/gmail/gmail_parser.py:2199:                + gmail_message_key
+src/gmail/gmail_parser.py:2227:                "Gmail account email is required."
+src/gmail/gmail_parser.py:2235:            "STARTING GMAIL PARSE"
+src/gmail/gmail_parser.py:2302:            "GMAIL PARSE SUMMARY"
+src/gmail/gmail_parser.py:2404:            "Alcalay Gmail EML parser"
+src/gmail/gmail_parser.py:2412:            "Gmail account email"
+src/gmail/gmail_parser.py:2420:            "Gmail storage root"
+src/gmail/gmail_parser.py:2443:    parser_instance = GmailParser(
+src/gmail/gmail_copy.py:1:from __future__ import annotations
+src/gmail/gmail_copy.py:3:import base64
+src/gmail/gmail_copy.py:4:import hashlib
+src/gmail/gmail_copy.py:5:import json
+src/gmail/gmail_copy.py:6:import re
+src/gmail/gmail_copy.py:7:import sys
+src/gmail/gmail_copy.py:8:from datetime import datetime, timezone
+src/gmail/gmail_copy.py:9:from email import policy
+src/gmail/gmail_copy.py:10:from email.parser import BytesParser
+src/gmail/gmail_copy.py:11:from pathlib import Path
+src/gmail/gmail_copy.py:12:from typing import Any
+src/gmail/gmail_copy.py:22:from database.connection import DatabaseConnection
+src/gmail/gmail_copy.py:23:from gmail.gmail_connection import GmailConnection
+src/gmail/gmail_copy.py:28:DEFAULT_STORAGE_ROOT = PROJECT_ROOT / "storage" / "gmail"
+src/gmail/gmail_copy.py:31:class GmailCopy:
+src/gmail/gmail_copy.py:47:        self.connection = GmailConnection(
+src/gmail/gmail_copy.py:53:        self.gmail_account_id = None
+src/gmail/gmail_copy.py:124:        return DatabaseConnection().connect()
+src/gmail/gmail_copy.py:141:                    FROM gmail_accounts ga
+src/gmail/gmail_copy.py:156:                        "Gmail account was not found in PostgreSQL: "
+src/gmail/gmail_copy.py:160:                self.gmail_account_id = row[0]
+src/gmail/gmail_copy.py:184:                    FROM gmail_labels
+src/gmail/gmail_copy.py:185:                    WHERE gmail_account_id = %s
+src/gmail/gmail_copy.py:191:                        self.gmail_account_id,
+src/gmail/gmail_copy.py:229:                    FROM gmail_labels
+src/gmail/gmail_copy.py:230:                    WHERE gmail_account_id = %s
+src/gmail/gmail_copy.py:235:                    (self.gmail_account_id,),
+src/gmail/gmail_copy.py:258:            raise RuntimeError("Gmail service is not connected.")
+src/gmail/gmail_copy.py:293:        self.log("SELECTED GMAIL LABELS")
+src/gmail/gmail_copy.py:391:                        UPDATE gmail_labels
+src/gmail/gmail_copy.py:395:                          AND gmail_account_id = %s
+src/gmail/gmail_copy.py:400:                            self.gmail_account_id,
+src/gmail/gmail_copy.py:460:        path = directory / (timestamp + "_gmail_copy_audit.json")
+src/gmail/gmail_copy.py:468:    def connect_gmail(self) -> None:
+src/gmail/gmail_copy.py:471:            "[GMAIL] Connecting: "
+src/gmail/gmail_copy.py:475:        result = self.connection.connect(
+src/gmail/gmail_copy.py:481:                "Gmail connection failed."
+src/gmail/gmail_copy.py:488:                "Gmail service was not created."
+src/gmail/gmail_copy.py:492:            "[GMAIL] Connected."
+src/gmail/gmail_copy.py:502:                "Gmail service is not connected."
+src/gmail/gmail_copy.py:636:                "Gmail service is not connected."
+src/gmail/gmail_copy.py:657:                "Gmail service is not connected."
+src/gmail/gmail_copy.py:677:                "Gmail returned no raw MIME data "
+src/gmail/gmail_copy.py:1028:                    FROM gmail_messages
+src/gmail/gmail_copy.py:1029:                    WHERE gmail_account_id = %s
+src/gmail/gmail_copy.py:1034:                        self.gmail_account_id,
+src/gmail/gmail_copy.py:1089:                    "source": "gmail",
+src/gmail/gmail_copy.py:1122:                    INSERT INTO gmail_messages (
+src/gmail/gmail_copy.py:1123:                        gmail_account_id,
+src/gmail/gmail_copy.py:1144:                        gmail_account_id,
+src/gmail/gmail_copy.py:1164:                        self.gmail_account_id,
+src/gmail/gmail_copy.py:1215:                        "Could not create or update gmail_messages."
+src/gmail/gmail_copy.py:1224:                        INSERT INTO gmail_message_labels (
+src/gmail/gmail_copy.py:1269:                        INSERT INTO gmail_message_labels (
+src/gmail/gmail_copy.py:1443:                    FROM gmail_attachments
+src/gmail/gmail_copy.py:1520:                    INSERT INTO gmail_attachments (
+src/gmail/gmail_copy.py:1521:                        gmail_message_id,
+src/gmail/gmail_copy.py:1536:                        gmail_message_id,
+src/gmail/gmail_copy.py:1859:                        UPDATE gmail_labels
+src/gmail/gmail_copy.py:1863:                          AND gmail_account_id = %s
+src/gmail/gmail_copy.py:1865:                        (label["id"], self.gmail_account_id),
+src/gmail/gmail_copy.py:2058:        self.log("ALCALAY - GMAIL COPY")
+src/gmail/gmail_copy.py:2064:        self.log("[DB] Gmail account ID: " + str(self.gmail_account_id))
+src/gmail/gmail_copy.py:2070:            self.log("[STOP] No enabled Gmail labels.")
+src/gmail/gmail_copy.py:2074:        self.connect_gmail()
+src/gmail/gmail_copy.py:2207:    conn = DatabaseConnection().connect()
+src/gmail/gmail_copy.py:2213:                FROM gmail_accounts
+src/gmail/gmail_copy.py:2221:                raise RuntimeError("No enabled Gmail account was found in PostgreSQL.")
+src/gmail/gmail_copy.py:2235:    copy_engine = GmailCopy(
+src/gmail/gmail_copy.py:2268:            "GMAIL COPY FAILED",
+src/gmail/gmail_accounts.py:1:from __future__ import annotations
+src/gmail/gmail_accounts.py:3:import json
+src/gmail/gmail_accounts.py:4:from datetime import datetime, timezone
+src/gmail/gmail_accounts.py:5:from pathlib import Path
+src/gmail/gmail_accounts.py:6:from typing import Any
+src/gmail/gmail_accounts.py:9:class GmailAccountsManager:
+src/gmail/gmail_accounts.py:11:    מנהל חשבונות Gmail והתגיות המקושרות אליהם.
+src/gmail/gmail_accounts.py:14:        config/gmail/accounts.json
+src/gmail/gmail_accounts.py:51:                / "gmail"
+src/gmail/gmail_accounts.py:182:            raise ValueError("כתובת Gmail אינה יכולה להיות ריקה")
+src/gmail/gmail_accounts.py:279:                f"חשבון Gmail אינו קיים: {email}"
+src/gmail/gmail_accounts.py:406:        מסמן שהתרעננות/שליפה מ-Gmail בוצעה.
+src/gmail/gmail_accounts.py:412:            Gmail History ID, אם קיים.
+init_files/setup_database.py:1:from __future__ import annotations
+init_files/setup_database.py:3:import os
+init_files/setup_database.py:4:import shutil
+init_files/setup_database.py:5:import socket
+init_files/setup_database.py:6:from dataclasses import dataclass
+init_files/setup_database.py:7:from typing import Any
+init_files/setup_report.py:1:from __future__ import annotations
+init_files/setup_report.py:3:from dataclasses import dataclass
+init_files/setup_report.py:4:from typing import Any
+init_files/setup_installer.py:1:from __future__ import annotations
+init_files/setup_installer.py:3:from dataclasses import dataclass
+init_files/setup_installer.py:4:from pathlib import Path
+init_files/setup_installer.py:5:from typing import Any
+init_files/setup_installer.py:7:from alcalay_server_setup import (
+init_files/setup_installer.py:50:        - synchronize Gmail
+init_files/setup_installer.py:51:        - synchronize Google Drive
+init_files/setup_services.py:1:from __future__ import annotations
+init_files/setup_services.py:3:import socket
+init_files/setup_services.py:4:from dataclasses import dataclass
+init_files/setup_services.py:5:from typing import Any
+init_files/setup_orchestrator.py:1:from __future__ import annotations
+init_files/setup_orchestrator.py:3:from dataclasses import dataclass
+init_files/setup_orchestrator.py:4:from typing import Any
+init_files/setup_orchestrator.py:6:from setup_auth import validate_auth_configuration
+init_files/setup_orchestrator.py:7:from setup_database import check_postgresql
+init_files/setup_orchestrator.py:8:from setup_database_schema import check_schema
+init_files/setup_orchestrator.py:9:from setup_detector import detect_server
+init_files/setup_orchestrator.py:10:from setup_installer import prepare_server
+init_files/setup_orchestrator.py:11:from setup_processing import validate_processing_configuration
+init_files/setup_orchestrator.py:12:from setup_report import build_setup_report
+init_files/setup_orchestrator.py:13:from setup_services import check_services
+init_files/setup_orchestrator.py:14:from setup_sources import validate_sources
+init_files/setup_orchestrator.py:15:from setup_sync import validate_sync
+init_files/setup_orchestrator.py:16:from setup_validator import validate_configuration
+init_files/setup_orchestrator.py:242:        - perform Gmail synchronization
+init_files/setup_orchestrator.py:243:        - perform Google Drive synchronization
+init_files/setup_detector.py:1:from __future__ import annotations
+init_files/setup_detector.py:3:import platform
+init_files/setup_detector.py:4:import shutil
+init_files/setup_detector.py:5:import socket
+init_files/setup_detector.py:6:import sys
+init_files/setup_detector.py:7:from dataclasses import asdict, dataclass
+init_files/setup_detector.py:8:from pathlib import Path
+init_files/setup_detector.py:9:from typing import Any
+init_files/setup_detector.py:11:from alcalay_server_setup import (
+init_files/setup_detector.py:142:        - connect Gmail
+init_files/setup_detector.py:143:        - connect Google Drive
+init_files/setup_sources.py:1:from __future__ import annotations
+init_files/setup_sources.py:3:from dataclasses import dataclass
+init_files/setup_sources.py:4:from typing import Any
+init_files/setup_sources.py:54:def validate_google_drive_source(
+init_files/setup_sources.py:58:    drive = sources.get("google_drive", {})
+init_files/setup_sources.py:61:        drive.get("enabled", False)
+init_files/setup_sources.py:67:            source="google_drive",
+init_files/setup_sources.py:68:            message="Google Drive source is disabled.",
+init_files/setup_sources.py:71:    root = drive.get("root")
+init_files/setup_sources.py:76:            source="google_drive",
+init_files/setup_sources.py:77:            message="Google Drive root is missing.",
+init_files/setup_sources.py:82:        source="google_drive",
+init_files/setup_sources.py:83:        message=f"Google Drive source configured: {root}",
+init_files/setup_sources.py:87:def validate_gmail_source(
+init_files/setup_sources.py:93:    gmail = sources.get("gmail", {})
+init_files/setup_sources.py:96:        gmail.get("enabled", False)
+init_files/setup_sources.py:103:                source="gmail",
+init_files/setup_sources.py:104:                message="Gmail source is disabled.",
+init_files/setup_sources.py:109:    accounts = gmail.get(
+init_files/setup_sources.py:118:                source="gmail",
+init_files/setup_sources.py:119:                message="Gmail accounts must be a list.",
+init_files/setup_sources.py:128:                source="gmail",
+init_files/setup_sources.py:130:                    "Gmail is enabled but no accounts "
+init_files/setup_sources.py:142:                    source=f"gmail_account_{index}",
+init_files/setup_sources.py:144:                        "Gmail account configuration "
+init_files/setup_sources.py:153:            f"gmail_{index:03d}",
+init_files/setup_sources.py:171:                    message="Gmail account email is missing.",
+init_files/setup_sources.py:181:                    message="Gmail labels must be a list.",
+init_files/setup_sources.py:191:                    f"Gmail account configured: {email}; "
+init_files/setup_sources.py:200:def validate_gmail_policy(
+init_files/setup_sources.py:204:    gmail = sources.get("gmail", {})
+init_files/setup_sources.py:206:    policy = gmail.get(
+init_files/setup_sources.py:242:            source="gmail_policy",
+init_files/setup_sources.py:244:                "Full Gmail mailbox synchronization "
+init_files/setup_sources.py:252:            source="gmail_policy",
+init_files/setup_sources.py:254:                "Gmail must use selected-label synchronization."
+init_files/setup_sources.py:261:            source="gmail_policy",
+init_files/setup_sources.py:263:                "Incremental Gmail synchronization "
+init_files/setup_sources.py:271:            source="gmail_policy",
+init_files/setup_sources.py:273:                "Gmail historyId tracking must remain enabled."
+init_files/setup_sources.py:279:        source="gmail_policy",
+init_files/setup_sources.py:281:            "Gmail synchronization policy is valid: "
+init_files/setup_sources.py:296:        - download Gmail messages
+init_files/setup_sources.py:297:        - download Drive files
+init_files/setup_sources.py:311:        validate_google_drive_source(
+init_files/setup_sources.py:317:        validate_gmail_source(
+init_files/setup_sources.py:323:        validate_gmail_policy(
+init_files/setup_validator.py:1:from __future__ import annotations
+init_files/setup_validator.py:3:from dataclasses import dataclass
+init_files/setup_validator.py:4:from pathlib import Path
+init_files/setup_validator.py:5:from typing import Any
+init_files/setup_validator.py:7:from alcalay_server_setup import (
+init_files/setup_validator.py:279:def validate_gmail_policy(
+init_files/setup_validator.py:289:    gmail = sources.get(
+init_files/setup_validator.py:290:        "gmail",
+init_files/setup_validator.py:294:    policy = gmail.get(
+init_files/setup_validator.py:329:            name="gmail_full_mailbox",
+init_files/setup_validator.py:341:            name="gmail_selected_labels",
+init_files/setup_validator.py:344:                "Gmail synchronization uses selected labels only."
+init_files/setup_validator.py:346:                else "Selected-label-only Gmail policy is disabled."
+init_files/setup_validator.py:353:            name="gmail_incremental",
+init_files/setup_validator.py:356:                "Incremental Gmail synchronization is enabled."
+init_files/setup_validator.py:358:                else "Incremental Gmail synchronization is disabled."
+init_files/setup_validator.py:365:            name="gmail_history_id",
+init_files/setup_validator.py:368:                "Gmail historyId tracking is enabled."
+init_files/setup_validator.py:370:                else "Gmail historyId tracking is disabled."
+init_files/setup_validator.py:467:        - download Gmail messages
+init_files/setup_validator.py:468:        - download Google Drive files
+init_files/setup_validator.py:509:        validate_gmail_policy(
+init_files/setup_ui.py:1:from __future__ import annotations
+init_files/setup_ui.py:3:import json
+init_files/setup_ui.py:4:import sys
+init_files/setup_ui.py:5:import traceback
+init_files/setup_ui.py:6:from datetime import datetime
+init_files/setup_ui.py:7:from pathlib import Path
+init_files/setup_ui.py:8:from typing import Any, Dict, Optional
+init_files/setup_ui.py:10:from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
+init_files/setup_ui.py:11:from PySide6.QtWidgets import (
+init_files/setup_ui.py:25:    QPushButton,
+init_files/setup_ui.py:161:        if "gmail" not in sources:
+init_files/setup_ui.py:164:                "חלק sources.gmail חסר.",
+init_files/setup_ui.py:167:        if "google_drive" not in sources:
+init_files/setup_ui.py:170:                "חלק sources.google_drive חסר.",
+init_files/setup_ui.py:369:    def check_google_drive(self) -> tuple[bool, str]:
+init_files/setup_ui.py:382:        drive = sources.get(
+init_files/setup_ui.py:383:            "google_drive",
+init_files/setup_ui.py:387:        if not isinstance(drive, dict):
+init_files/setup_ui.py:390:                "הגדרות Google Drive אינן תקינות.",
+init_files/setup_ui.py:394:            drive.get("enabled"),
+init_files/setup_ui.py:401:                "Google Drive אינו מופעל.",
+init_files/setup_ui.py:405:            drive.get("local_root")
+init_files/setup_ui.py:406:            or drive.get("documents_root")
+init_files/setup_ui.py:407:            or drive.get("root")
+init_files/setup_ui.py:413:                "Google Drive מופעל אך לא הוגדר נתיב מקומי.",
+init_files/setup_ui.py:427:                f"נתיב Google Drive תקין: {path}",
+init_files/setup_ui.py:434:                f"לא ניתן להכין את נתיב Google Drive: {exc}",
+init_files/setup_ui.py:437:    def check_gmail(self) -> tuple[bool, str]:
+init_files/setup_ui.py:450:        gmail = sources.get(
+init_files/setup_ui.py:451:            "gmail",
+init_files/setup_ui.py:455:        if not isinstance(gmail, dict):
+init_files/setup_ui.py:458:                "הגדרות Gmail אינן תקינות.",
+init_files/setup_ui.py:461:        accounts = gmail.get(
+init_files/setup_ui.py:469:                "רשימת חשבונות Gmail אינה תקינה.",
+init_files/setup_ui.py:475:                "Gmail מופעל אך עדיין לא חובר חשבון.",
+init_files/setup_ui.py:491:                "Gmail מוגדר אך אין חשבון פעיל.",
+init_files/setup_ui.py:519:                "חשבונות Gmail פעילים ללא כתובת: "
+init_files/setup_ui.py:525:            f"נמצאו {len(enabled_accounts)} חשבונות Gmail פעילים.",
+init_files/setup_ui.py:784:                "בדיקת Google Drive",
+init_files/setup_ui.py:785:                self.check_google_drive,
+init_files/setup_ui.py:788:                "בדיקת Gmail",
+init_files/setup_ui.py:789:                self.check_gmail,
+init_files/setup_ui.py:1123:class GoogleDriveStep(QWidget):
+init_files/setup_ui.py:1134:            "Google Drive"
+init_files/setup_ui.py:1144:            "הפעל Google Drive"
+init_files/setup_ui.py:1164:            "חיבור Google Drive עצמו יתווסף למנגנון הסנכרון."
+init_files/setup_ui.py:1176:class GmailStep(QWidget):
+init_files/setup_ui.py:1187:            "Gmail"
+init_files/setup_ui.py:1197:            "הפעל Gmail"
+init_files/setup_ui.py:1211:            "gmail_001"
+init_files/setup_ui.py:1222:            "כתובת Gmail:",
+init_files/setup_ui.py:1756:            "בדיקת Google Drive",
+init_files/setup_ui.py:1757:            "בדיקת Gmail",
+init_files/setup_ui.py:1806:        self.start_button = QPushButton(
+init_files/setup_ui.py:1810:        self.stop_button = QPushButton(
+init_files/setup_ui.py:1818:        self.clear_button = QPushButton(
+init_files/setup_ui.py:1840:        self.start_button.clicked.connect(
+init_files/setup_ui.py:1844:        self.stop_button.clicked.connect(
+init_files/setup_ui.py:1848:        self.clear_button.clicked.connect(
+init_files/setup_ui.py:1949:        self.google_drive_step = GoogleDriveStep()
+init_files/setup_ui.py:1951:        self.gmail_step = GmailStep()
+init_files/setup_ui.py:1968:            self.google_drive_step,
+init_files/setup_ui.py:1969:            self.gmail_step,
+init_files/setup_ui.py:1990:        self.previous_button = QPushButton(
+init_files/setup_ui.py:1994:        self.next_button = QPushButton(
+init_files/setup_ui.py:1998:        self.save_button = QPushButton(
+init_files/setup_ui.py:2002:        self.validate_button = QPushButton(
+init_files/setup_ui.py:2028:        self.previous_button.clicked.connect(
+init_files/setup_ui.py:2032:        self.next_button.clicked.connect(
+init_files/setup_ui.py:2036:        self.save_button.clicked.connect(
+init_files/setup_ui.py:2040:        self.validate_button.clicked.connect(
+init_files/setup_ui.py:2044:        self.validation_step.start_requested.connect(
+init_files/setup_ui.py:2048:        self.validation_step.stop_requested.connect(
+init_files/setup_ui.py:2052:        self.stack.currentChanged.connect(
+init_files/setup_ui.py:2077:        gmail_email = (
+init_files/setup_ui.py:2078:            self.gmail_step.email.text().strip()
+init_files/setup_ui.py:2081:        gmail_account = {
+init_files/setup_ui.py:2083:                self.gmail_step.account_id.text().strip()
+init_files/setup_ui.py:2084:                or "gmail_001"
+init_files/setup_ui.py:2086:            "email": gmail_email,
+init_files/setup_ui.py:2088:                self.gmail_step.enabled.isChecked()
+init_files/setup_ui.py:2089:                and bool(gmail_email)
+init_files/setup_ui.py:2092:                self.gmail_step.selected_labels()
+init_files/setup_ui.py:2096:                self.gmail_step.download_attachments.isChecked()
+init_files/setup_ui.py:2099:                self.gmail_step.index_message_body.isChecked()
+init_files/setup_ui.py:2102:                self.gmail_step.incremental_sync.isChecked()
+init_files/setup_ui.py:2106:                if not gmail_email
+init_files/setup_ui.py:2136:            "google_drive": {
+init_files/setup_ui.py:2138:                    self.google_drive_step.enabled.isChecked()
+init_files/setup_ui.py:2141:                    self.google_drive_step.local_root.text().strip()
+init_files/setup_ui.py:2145:            "gmail": {
+init_files/setup_ui.py:2146:                "account_id": gmail_account[
+init_files/setup_ui.py:2149:                "email": gmail_account[
+init_files/setup_ui.py:2152:                "enabled": gmail_account[
+init_files/setup_ui.py:2155:                "selected_labels": gmail_account[
+init_files/setup_ui.py:2158:                "download_attachments": gmail_account[
+init_files/setup_ui.py:2161:                "index_message_body": gmail_account[
+init_files/setup_ui.py:2164:                "incremental_sync": gmail_account[
+init_files/setup_ui.py:2167:                "status": gmail_account[
+init_files/setup_ui.py:2490:        thread.started.connect(
+init_files/setup_ui.py:2494:        worker.progress.connect(
+init_files/setup_ui.py:2498:        worker.stage_started.connect(
+init_files/setup_ui.py:2502:        worker.activity.connect(
+init_files/setup_ui.py:2506:        worker.stage_finished.connect(
+init_files/setup_ui.py:2510:        worker.completed.connect(
+init_files/setup_ui.py:2514:        worker.stopped.connect(
+init_files/setup_ui.py:2518:        worker.failed.connect(
+init_files/setup_ui.py:2522:        worker.completed.connect(
+init_files/setup_ui.py:2526:        worker.stopped.connect(
+init_files/setup_ui.py:2530:        worker.failed.connect(
+init_files/setup_ui.py:2534:        thread.finished.connect(
+init_files/setup_ui.py:2883:    return app.exec()
+init_files/setup_sync.py:1:from __future__ import annotations
+init_files/setup_sync.py:3:from dataclasses import dataclass
+init_files/setup_sync.py:4:from typing import Any
+init_files/setup_sync.py:117:def validate_gmail_sync(
+init_files/setup_sync.py:127:    gmail = sources.get(
+init_files/setup_sync.py:128:        "gmail",
+init_files/setup_sync.py:132:    policy = gmail.get(
+init_files/setup_sync.py:159:            component="gmail.incremental",
+init_files/setup_sync.py:161:                "Gmail incremental synchronization "
+init_files/setup_sync.py:165:                "Gmail incremental synchronization "
+init_files/setup_sync.py:174:            component="gmail.history_id",
+init_files/setup_sync.py:176:                "Gmail historyId tracking is enabled."
+init_files/setup_sync.py:179:                "Gmail historyId tracking is disabled."
+init_files/setup_sync.py:191:                component="gmail.deduplication",
+init_files/setup_sync.py:193:                    "Gmail deduplication configuration "
+init_files/setup_sync.py:203:                component="gmail.deduplication",
+init_files/setup_sync.py:205:                    "At least one Gmail deduplication "
+init_files/setup_sync.py:215:                component="gmail.deduplication",
+init_files/setup_sync.py:217:                    "Gmail deduplication methods: "
+init_files/setup_sync.py:226:    accounts = gmail.get(
+init_files/setup_sync.py:238:                component="gmail.accounts",
+init_files/setup_sync.py:240:                    "Gmail accounts must be configured "
+init_files/setup_sync.py:258:                    component=f"gmail.account.{index}",
+init_files/setup_sync.py:260:                        "Gmail account configuration "
+init_files/setup_sync.py:269:            f"gmail_{index:03d}",
+init_files/setup_sync.py:275:                component=f"gmail.account.{account_id}",
+init_files/setup_sync.py:277:                    "Gmail synchronization state is "
+init_files/setup_sync.py:329:        - connect to Gmail
+init_files/setup_sync.py:330:        - connect to Google Drive
+init_files/setup_sync.py:352:        validate_gmail_sync(
+init_files/alcalay_server_setup.py:1:from __future__ import annotations
+init_files/alcalay_server_setup.py:3:import json
+init_files/alcalay_server_setup.py:4:import platform
+init_files/alcalay_server_setup.py:5:import socket
+init_files/alcalay_server_setup.py:6:from datetime import datetime, timezone
+init_files/alcalay_server_setup.py:7:from pathlib import Path
+init_files/alcalay_server_setup.py:8:from typing import Any
+init_files/alcalay_server_setup.py:156:        - connect to Gmail
+init_files/alcalay_server_setup.py:157:        - connect to Google Drive
+init_files/alcalay_server_setup.py:178:    google_drive = ui_state.get(
+init_files/alcalay_server_setup.py:179:        "google_drive",
+init_files/alcalay_server_setup.py:183:    gmail = ui_state.get(
+init_files/alcalay_server_setup.py:184:        "gmail",
+init_files/alcalay_server_setup.py:286:    selected_labels = gmail.get(
+init_files/alcalay_server_setup.py:299:    gmail_account = {
+init_files/alcalay_server_setup.py:301:            gmail.get("account_id")
+init_files/alcalay_server_setup.py:302:            or "gmail_001"
+init_files/alcalay_server_setup.py:304:        "email": gmail.get(
+init_files/alcalay_server_setup.py:309:            gmail.get(
+init_files/alcalay_server_setup.py:317:            gmail.get(
+init_files/alcalay_server_setup.py:323:            gmail.get(
+init_files/alcalay_server_setup.py:329:            gmail.get(
+init_files/alcalay_server_setup.py:334:        "last_successful_sync": gmail.get(
+init_files/alcalay_server_setup.py:337:        "history_id": gmail.get(
+init_files/alcalay_server_setup.py:340:        "status": gmail.get(
+init_files/alcalay_server_setup.py:427:            "google_drive": {
+init_files/alcalay_server_setup.py:429:                    google_drive.get(
+init_files/alcalay_server_setup.py:434:                "root": google_drive.get(
+init_files/alcalay_server_setup.py:438:                "sync_mode": google_drive.get(
+init_files/alcalay_server_setup.py:443:                    google_drive.get(
+init_files/alcalay_server_setup.py:450:            "gmail": {
+init_files/alcalay_server_setup.py:461:                    gmail_account
+init_files/alcalay_server_setup.py:765:    gmail = (
+init_files/alcalay_server_setup.py:768:        .get("gmail", {})
+init_files/alcalay_server_setup.py:835:    policy = gmail.get(
+init_files/alcalay_server_setup.py:844:            "Entire Gmail mailbox synchronization "
+init_files/alcalay_server_setup.py:852:            "Gmail selected-label policy is required."
+init_files/alcalay_server_setup.py:859:            "Gmail incremental synchronization "
+init_files/setup_auth.py:1:from __future__ import annotations
+init_files/setup_auth.py:3:import secrets
+init_files/setup_auth.py:4:from dataclasses import dataclass
+init_files/setup_auth.py:5:from typing import Any
+init_files/setup_database_schema.py:1:from __future__ import annotations
+init_files/setup_database_schema.py:3:from dataclasses import dataclass
+init_files/setup_database_schema.py:4:from pathlib import Path
+init_files/setup_database_schema.py:5:from typing import Any
+init_files/setup_processing.py:1:from __future__ import annotations
+init_files/setup_processing.py:3:from dataclasses import dataclass
+init_files/setup_processing.py:4:from typing import Any
+init_files/setup_config.py:1:from __future__ import annotations
+init_files/setup_config.py:3:from pathlib import Path
+init_files/setup_config.py:4:from typing import Any
+init_files/setup_config.py:6:from alcalay_server_setup import (
+init_files/setup_config.py:131:    gmail = sources.get(
+init_files/setup_config.py:132:        "gmail",
+init_files/setup_config.py:136:    accounts = gmail.get(
+init_files/setup_config.py:168:        "gmail_enabled": gmail.get(
+init_files/setup_config.py:172:        "gmail_account_count": len(accounts)
