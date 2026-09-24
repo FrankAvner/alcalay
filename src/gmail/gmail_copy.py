@@ -13,9 +13,10 @@ from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = PROJECT_ROOT / "src"
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+if str(SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(SRC_ROOT))
 
 
 from database.connection import DatabaseConnection
@@ -113,14 +114,7 @@ class GmailCopy:
         if not value:
             return b""
 
-        padding = (
-            "="
-            * (
-                4
-                - len(value) % 4
-            )
-            % 4
-        )
+        padding = "=" * ((4 - len(value) % 4) % 4)
 
         return base64.urlsafe_b64decode(
             value + padding
@@ -229,11 +223,14 @@ class GmailCopy:
                         label_id,
                         label_name,
                         selected_for_sync,
-                        enabled
+                        enabled,
+                        updated_at,
+                        last_import_completed_at
                     FROM gmail_labels
                     WHERE gmail_account_id = %s
+                      AND selected_for_sync = TRUE
                       AND enabled = TRUE
-                    ORDER BY id
+                    ORDER BY label_name
                     """,
                     (self.gmail_account_id,),
                 )
@@ -247,6 +244,8 @@ class GmailCopy:
                         "label_name": row[2],
                         "selected_for_sync": row[3],
                         "enabled": row[4],
+                        "updated_at": row[5],
+                        "last_import_completed_at": row[6],
                     }
                     for row in rows
                 ]
@@ -280,27 +279,39 @@ class GmailCopy:
             if not page_token:
                 return total
 
+    def format_datetime(self, value: Any) -> str:
+        if value is None:
+            return "Never"
+        if isinstance(value, datetime):
+            return value.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        return str(value)
+
     def count_all_labels(self, labels: list[dict[str, Any]]) -> None:
 
         self.log("")
         self.log("=" * 72)
-        self.log("GMAIL LABEL MESSAGE COUNTS")
+        self.log("SELECTED GMAIL LABELS")
         self.log("=" * 72)
 
         for index, label in enumerate(labels, 1):
             count = self.count_label_messages(label["label_id"])
             label["message_count"] = count
-            selected = " *" if label.get("selected_for_sync") else ""
+
+            last_update = label.get("last_import_completed_at")
+            if last_update is None:
+                last_update = label.get("updated_at")
+
             self.log(
-                str(index) + ". "
+                str(index)
+                + ". "
                 + label["label_name"]
-                + " — " + str(count) + " הודעות"
-                + selected
+                + " | messages: "
+                + str(count)
+                + " | last update: "
+                + self.format_datetime(last_update)
             )
 
         self.log("=" * 72)
-        self.log("* = מסומן כרגע ב-PostgreSQL")
-        self.log("=")
 
     def parse_label_selection(self, value: str, labels: list[dict[str, Any]]) -> list[int]:
 
@@ -342,45 +353,13 @@ class GmailCopy:
 
         return sorted(selected)
 
-    def select_labels_for_copy(
-        self,
-        labels: list[dict[str, Any]],
-        forced_label_ids: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
+    def select_labels_for_copy(self, labels: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
-        if forced_label_ids is not None:
-            requested = {str(value).strip() for value in forced_label_ids if str(value).strip()}
-            selected = [
-                label
-                for label in labels
-                if str(label.get("label_id", "")).strip() in requested
-                or str(label.get("id", "")).strip() in requested
-            ]
-
-            missing = requested - {
-                str(label.get("label_id", "")).strip()
-                for label in selected
-            } - {
-                str(label.get("id", "")).strip()
-                for label in selected
-            }
-
-            if missing:
-                raise ValueError(
-                    "Labels not found: " + ", ".join(sorted(missing))
-                )
-
-            if not selected:
-                raise ValueError("לא נבחרו Labels.")
-        else:
-            self.log("")
-            self.log("Labels להעתקה: ניתן לרשום למשל 1,4,7 או 1-3,7")
-            self.log("Enter = להשתמש בבחירה הנוכחית ב-PostgreSQL")
-            self.log("ALL = כל ה-Labels")
-
-            value = input("Labels להעתקה: ")
-            indexes = self.parse_label_selection(value, labels)
-            selected = [labels[index - 1] for index in indexes]
+        self.log("")
+        self.log("Enter label numbers separated by commas, for example: 1,4,7 or 1-3,7")
+        value = input("Labels to copy: ").strip()
+        indexes = self.parse_label_selection(value, labels)
+        selected = [labels[index - 1] for index in indexes]
 
         self.log("")
         self.log("=" * 72)
@@ -1866,6 +1845,32 @@ class GmailCopy:
         finally:
             conn.close()
 
+    def mark_labels_copy_completed(
+        self,
+        labels: list[dict[str, Any]],
+    ) -> None:
+
+        conn = self.get_db_connection()
+        try:
+            with conn.cursor() as cursor:
+                for label in labels:
+                    cursor.execute(
+                        """
+                        UPDATE gmail_labels
+                        SET last_import_completed_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = %s
+                          AND gmail_account_id = %s
+                        """,
+                        (label["id"], self.gmail_account_id),
+                    )
+                conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
     def process_message(
         self,
         message_id: str,
@@ -1906,29 +1911,12 @@ class GmailCopy:
                 + str(existing_id)
             )
 
-            if self.dry_run:
-                full_message = self.get_message_full(message_id)
-                self.process_attachments(
-                    message_id,
-                    None,
-                    full_message,
+            if not self.dry_run:
+
+                self.add_label_relationships(
+                    existing_id,
+                    selected_labels,
                 )
-                return "existing"
-
-            self.add_label_relationships(
-                existing_id,
-                selected_labels,
-            )
-
-            # An existing email may have been imported before its attachments
-            # were available. Re-read the Gmail message and reconcile all
-            # attachments instead of skipping the message completely.
-            full_message = self.get_message_full(message_id)
-            self.process_attachments(
-                message_id,
-                existing_id,
-                full_message,
-            )
 
             return "existing"
 
@@ -2064,8 +2052,6 @@ class GmailCopy:
 
     def run(
         self,
-        forced_label_ids: list[str] | None = None,
-        confirmed: bool = False,
     ) -> dict[str, Any]:
 
         self.log("=" * 72)
@@ -2089,10 +2075,7 @@ class GmailCopy:
 
         # First phase: counts only. No message bodies, MIME, attachments or files are downloaded.
         self.count_all_labels(all_labels)
-        selected = self.select_labels_for_copy(
-            all_labels,
-            forced_label_ids=forced_label_ids,
-        )
+        selected = self.select_labels_for_copy(all_labels)
 
         if not selected:
             self.log("[STOP] No labels selected.")
@@ -2119,7 +2102,7 @@ class GmailCopy:
         self.log("=" * 72)
 
         # This is the safety gate. Nothing below this point fetches message bodies until YES is entered.
-        if not confirmed and not self.confirm_copy(selected, self.stats["unique_messages"]):
+        if not self.confirm_copy(selected, self.stats["unique_messages"]):
             self.log("")
             self.log("[STOP] COPY בוטל לפני הורדת הודעות.")
             audit = self.create_audit_data(
@@ -2132,26 +2115,60 @@ class GmailCopy:
                 self.save_audit_file(audit)
             return self.stats
 
-        self.save_selected_labels_to_database(selected, all_labels)
-
         self.log("")
         self.log("[COPY] Starting message processing...")
 
+        total_messages = len(message_labels)
+        copied = 0
+        existing = 0
+        failed = 0
+
         for index, (message_id, labels) in enumerate(message_labels.items(), 1):
-            if index == 1 or index == len(message_labels) or index % 25 == 0:
-                self.log(
-                    "[PROGRESS] " + str(index) + "/" + str(len(message_labels))
-                )
             try:
-                self.process_message(message_id, labels)
-            except Exception as exc:
-                self.stats["errors"] += 1
+                result = self.process_message(message_id, labels)
+                if result == "new":
+                    copied += 1
+                elif result == "existing":
+                    existing += 1
+
+                remaining = total_messages - index
                 self.log(
-                    "[ERROR] " + message_id + ": "
-                    + type(exc).__name__ + ": " + str(exc)
+                    "[PROGRESS] "
+                    + str(index)
+                    + "/"
+                    + str(total_messages)
+                    + " | copied: "
+                    + str(copied)
+                    + " | existing: "
+                    + str(existing)
+                    + " | remaining: "
+                    + str(remaining)
+                    + " | message: "
+                    + message_id
+                )
+            except Exception as exc:
+                failed += 1
+                self.stats["errors"] += 1
+                remaining = total_messages - index
+                self.log(
+                    "[ERROR] "
+                    + message_id
+                    + " | copied: "
+                    + str(copied)
+                    + " | existing: "
+                    + str(existing)
+                    + " | remaining: "
+                    + str(remaining)
+                    + " | "
+                    + type(exc).__name__
+                    + ": "
+                    + str(exc)
                 )
 
         copy_finished_at = self.utc_iso()
+        if not self.dry_run:
+            self.mark_labels_copy_completed(selected)
+
         audit = self.create_audit_data(
             selected,
             "DRY_RUN_COMPLETED" if self.dry_run else "COPY_COMPLETED",
@@ -2186,73 +2203,79 @@ class GmailCopy:
         return self.stats
 
 
+def get_current_account_email() -> str:
+    conn = DatabaseConnection().connect()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT email
+                FROM gmail_accounts
+                WHERE enabled = TRUE
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                raise RuntimeError("No enabled Gmail account was found in PostgreSQL.")
+            return str(row[0])
+    finally:
+        conn.close()
+
+
 def main() -> int:
 
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        description="Alcalay Gmail COPY"
+    account_email = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else get_current_account_email()
     )
-    parser.add_argument(
-        "account",
-        nargs="?",
-        default="frank.avner@gmail.com",
-        help="Gmail account email",
-    )
-    parser.add_argument(
-        "--labels",
-        default=None,
-        help="Comma-separated Gmail label IDs or database label IDs",
-    )
-    parser.add_argument(
-        "--yes",
-        action="store_true",
-        help="Confirm COPY without interactive input",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run without writing data",
-    )
-
-    args = parser.parse_args()
-
-    forced_label_ids = None
-    if args.labels:
-        forced_label_ids = [
-            value.strip()
-            for value in args.labels.split(",")
-            if value.strip()
-        ]
 
     copy_engine = GmailCopy(
-        account_email=args.account,
-        dry_run=(True if args.dry_run else DRY_RUN),
+        account_email=account_email,
+        dry_run=DRY_RUN,
     )
 
     try:
 
-        copy_engine.run(
-            forced_label_ids=forced_label_ids,
-            confirmed=args.yes,
-        )
+        copy_engine.run()
 
         return 0
 
     except KeyboardInterrupt:
 
-        print("", flush=True)
-        print("Stopped by user.", flush=True)
+        print(
+            "",
+            flush=True,
+        )
+
+        print(
+            "Stopped by user.",
+            flush=True,
+        )
+
         return 130
 
     except Exception as exc:
 
-        print("", flush=True)
-        print("GMAIL COPY FAILED", flush=True)
         print(
-            type(exc).__name__ + ": " + str(exc),
+            "",
             flush=True,
         )
+
+        print(
+            "GMAIL COPY FAILED",
+            flush=True,
+        )
+
+        print(
+            type(exc).__name__
+            + ": "
+            + str(exc),
+            flush=True,
+        )
+
         return 1
 
 

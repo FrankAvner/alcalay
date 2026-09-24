@@ -790,7 +790,7 @@
           "updated_at": "2026-09-20T17:12:58.644608+00:00",
           "label_id": "Label_5684316428990878238",
           "label_name": "בן יהודה -הוצאות שוטפות",
-          "selected_for_sync": false,
+          "selected_for_sync": true,
           "label_type": "user"
         },
         {
